@@ -1,0 +1,17 @@
+/**
+ * Wrangler config for the Cloudflare Durable Object template
+ * STRICTLY DO NOT MODIFY THIS FILE - Hidden from AI to prevent breaking core functionality
+ */
+ {
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "v1-solvasure-kenya-7d045dcf-fa11-4563-82f1-a5c94b2f2272",
+	"main": "worker/index.ts",
+	"compatibility_date": "2025-04-24",
+	"assets": {
+		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/api/*", "!/api/docs/*"]
+	},
+	"observability": {
+		"enabled": true
+	}
+}
