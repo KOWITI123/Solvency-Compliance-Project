@@ -5,6 +5,8 @@ export interface User {
   role: UserRole;
   businessName?: string;
   registrationNumber?: string;
+  region?: string; // For Insurers
+  size?: 'Small' | 'Medium' | 'Large'; // For Insurers
 }
 export interface Submission {
   id: string;
