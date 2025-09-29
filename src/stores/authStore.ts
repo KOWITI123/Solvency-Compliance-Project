@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import { User, UserRole } from '@/lib/types';
 import { MOCK_USERS } from '@/lib/mockData';
+
 interface AuthState {
   isAuthenticated: boolean;
   user: User | null;
@@ -11,39 +12,57 @@ interface AuthState {
   logout: () => void;
   signup: (data: { username: string; businessName: string; registrationNumber: string }) => void;
 }
+
 export const useAuthStore = create<AuthState>()(
   persist(
     immer((set, get) => ({
       isAuthenticated: false,
       user: null,
       users: MOCK_USERS,
+      
       login: (username, role) => {
+        console.log('AuthStore login attempt:', { username, role }); // Debug log
+        console.log('Available users:', MOCK_USERS.map(u => ({ username: u.username, role: u.role }))); // Debug log
+        
         const foundUser = get().users.find(
           (u) => u.username.toLowerCase() === username.toLowerCase() && u.role === role
         );
+        
+        console.log('Found user:', foundUser); // Debug log
+        
         if (foundUser) {
           set({ isAuthenticated: true, user: foundUser });
+          console.log('Login successful, state updated'); // Debug log
           return true;
         }
+        
+        console.log('Login failed - user not found'); // Debug log
         return false;
       },
+      
       logout: () => {
+        console.log('Logout called'); // Debug log
         set({ isAuthenticated: false, user: null });
       },
+      
       signup: (data) => {
         const existingUser = get().users.find(u => u.username.toLowerCase() === data.username.toLowerCase());
         if (existingUser) {
-          throw new Error("An account with this email already exists.");
+          throw new Error('User already exists');
         }
+        
         const newUser: User = {
-          id: `user-${Date.now()}`,
+          id: Date.now().toString(),
           username: data.username,
           role: 'Insurer',
           businessName: data.businessName,
           registrationNumber: data.registrationNumber,
         };
+        
         set(state => {
           state.users.push(newUser);
+          state.isAuthenticated = true;
+          state.user = newUser;
         });
       },
     })),
@@ -53,7 +72,6 @@ export const useAuthStore = create<AuthState>()(
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
         user: state.user,
-        // Do not persist the full user list in session storage for security/size reasons
       }),
     }
   )
