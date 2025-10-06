@@ -23,5 +23,19 @@ export const MOCK_USERS: User[] = [
     role: "Admin",
     businessName: "SolvaSure Admin",
     registrationNumber: "ADM001"
+  },
+  {
+    id: 'reg-1',
+    username: 'regulator@ira.co.ke',
+    role: 'Regulator',
+    businessName: 'IRA Kenya',
+    registrationNumber: 'IRA-001'
+  },
+  {
+    id: 'admin-1', 
+    username: 'admin@solvasure.co.ke',
+    role: 'Admin',
+    businessName: 'SolvaSure Kenya',
+    registrationNumber: 'SS-001'
   }
 ];

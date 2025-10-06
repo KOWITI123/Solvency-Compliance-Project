@@ -11,17 +11,21 @@ import { useAuthStore } from '@/stores/authStore';
 import { toast } from 'sonner';
 import { ShieldCheck } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
+
 const signUpSchema = z.object({
   businessName: z.string().min(1, { message: 'Business name is required.' }),
   registrationNumber: z.string().min(1, { message: 'Registration number is required.' }),
   username: z.string().email({ message: 'Please enter a valid email address.' }),
   password: z.string().min(8, { message: 'Password must be at least 8 characters long.' }),
 });
+
 type SignUpFormValues = z.infer<typeof signUpSchema>;
+
 export function SignUpPage() {
   const navigate = useNavigate();
   const signup = useAuthStore((state) => state.signup);
   const [isLoading, setIsLoading] = useState(false);
+
   const form = useForm<SignUpFormValues>({
     resolver: zodResolver(signUpSchema),
     defaultValues: {
@@ -31,30 +35,64 @@ export function SignUpPage() {
       password: '',
     },
   });
-  const onSubmit = (values: SignUpFormValues) => {
+
+  const onSubmit = async (values: SignUpFormValues) => {
+    console.log('Form submitted with values:', values);
     setIsLoading(true);
-    setTimeout(() => {
-      try {
+    
+    try {
+      const requestBody = {
+        business_name: values.businessName,
+        registration_number: values.registrationNumber,
+        business_email: values.username,
+        password: values.password,
+        role: 'insurer', // Always insurer for signup
+      };
+      
+      console.log('Sending request to API:', requestBody);
+      
+      const response = await fetch('http://localhost:5000/api/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      console.log('Response status:', response.status);
+      const data = await response.json();
+      console.log('Response data:', data);
+
+      if (response.ok) {
+        // Success - call auth store
         signup({
-          username: values.username,
-          businessName: values.businessName,
-          registrationNumber: values.registrationNumber,
+          username: data.business_email,
+          businessName: data.business_name,
+          registrationNumber: data.registration_number,
         });
+
         toast.success('Registration successful!', {
           description: 'You can now log in with your new account.',
         });
+        
         navigate('/login');
-      } catch (error) {
-        if (error instanceof Error) {
-          toast.error('Registration Failed', { description: error.message });
-        } else {
-          toast.error('Registration Failed', { description: 'An unknown error occurred.' });
-        }
-      } finally {
-        setIsLoading(false);
+      } else {
+        // API returned an error
+        console.error('API Error:', data.error);
+        toast.error('Registration Failed', { 
+          description: data.error || 'An error occurred during registration.' 
+        });
       }
-    }, 1000);
+    } catch (error) {
+      console.error('Network error:', error);
+      toast.error('Registration Failed', { 
+        description: 'Could not connect to server. Please make sure the backend is running.' 
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
+
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-muted/40 p-4">
       <ThemeToggle className="absolute top-4 right-4" />
@@ -66,7 +104,7 @@ export function SignUpPage() {
             </div>
           </div>
           <CardTitle className="text-3xl font-bold">Create an Account</CardTitle>
-          <CardDescription>Join SolvaSure Kenya today.</CardDescription>
+          <CardDescription>Join SolvaSure Kenya as an Insurance Company.</CardDescription>
         </CardHeader>
         <CardContent>
           <Form {...form}>
@@ -123,11 +161,26 @@ export function SignUpPage() {
                   </FormItem>
                 )}
               />
-              <Button type="submit" className="w-full font-semibold text-lg py-6 transition-all hover:scale-105 active:scale-95" disabled={isLoading}>
+              <Button 
+                type="submit" 
+                className="w-full font-semibold text-lg py-6 transition-all hover:scale-105 active:scale-95" 
+                disabled={isLoading}
+              >
                 {isLoading ? 'Creating Account...' : 'Sign Up'}
               </Button>
             </form>
           </Form>
+          
+          {/* Information for insurers */}
+          <div className="mt-4 p-3 bg-muted/50 rounded-lg">
+            <p className="text-sm text-muted-foreground text-center">
+              <strong>For Insurance Companies Only</strong>
+            </p>
+            <div className="text-xs text-muted-foreground mt-1 text-center">
+              Regulatory staff will be provided separate access credentials
+            </div>
+          </div>
+          
           <div className="mt-6 text-center text-sm">
             Already have an account?{' '}
             <Link to="/login" className="font-medium text-primary hover:underline">

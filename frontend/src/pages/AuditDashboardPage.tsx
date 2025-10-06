@@ -1,22 +1,50 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { BarChart, Bar, PieChart, Pie, Tooltip, Legend, ResponsiveContainer, Cell, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { useAuditStore, type AuditReview } from '../stores/auditStore';
 import { useAuthStore } from '../stores/authStore';
-import { CheckCircle, XCircle, AlertCircle, Eye, MessageSquare, Download, FileCheck, Users, MapPin, Building } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, Eye, MessageSquare, Download, FileCheck, Users, MapPin, Building, Bell, Clock, Hash } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
+import { FaCheck, FaTimes, FaFileAlt, FaUser } from 'react-icons/fa';
 
 const COLORS = { compliant: 'hsl(var(--chart-2))', nonCompliant: 'hsl(var(--chart-5))' };
+
+// Add new interfaces for regulator functionality
+interface PendingSubmission {
+  id: number;
+  data_hash: string;
+  capital: number;
+  liabilities: number;
+  solvency_ratio: number;
+  submission_date: string;
+  insurer_submitted_at: string;
+  insurer?: {
+    id: number;
+    username: string;
+    email: string;
+  };
+  status: string;
+}
+
+interface RegulatorNotification {
+  id: number;
+  message: string;
+  urgency: string;
+  sent_at: string;
+  sender?: {
+    username: string;
+  };
+}
 
 export function AuditDashboardPage() {
   const { 
@@ -34,25 +62,168 @@ export function AuditDashboardPage() {
   const [additionalComment, setAdditionalComment] = useState('');
   const [reviewStatus, setReviewStatus] = useState<AuditReview['status']>('pending');
   
-  // New filters for enhanced functionality
+  // New state for regulator approval functionality
+  const [pendingSubmissions, setPendingSubmissions] = useState<PendingSubmission[]>([]);
+  const [regulatorNotifications, setRegulatorNotifications] = useState<RegulatorNotification[]>([]);
+  const [selectedPendingSubmission, setSelectedPendingSubmission] = useState<PendingSubmission | null>(null);
+  const [approvalComments, setApprovalComments] = useState('');
+  const [isApproving, setIsApproving] = useState(false);
+  const [isRejecting, setIsRejecting] = useState(false);
+  
+  // Existing filters
   const [insurerIdFilter, setInsurerIdFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateRangeFilter, setDateRangeFilter] = useState('all');
+
+  // New functions for regulator approval workflow
+  const fetchPendingSubmissions = async () => {
+    try {
+      console.log('📋 Fetching pending submissions for audit...');
+      
+      const response = await fetch('http://localhost:5000/api/regulator/pending-submissions');
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Pending submissions data:', data);
+        setPendingSubmissions(data.submissions || []);
+      } else {
+        console.error('Failed to fetch pending submissions:', response.status);
+        setPendingSubmissions([]);
+      }
+    } catch (error) {
+      console.error('Error fetching pending submissions:', error);
+      setPendingSubmissions([]);
+    }
+  };
+
+  const fetchRegulatorNotifications = useCallback(async () => {
+    try {
+      console.log('📬 Fetching regulator notifications...');
+      
+      const response = await fetch('http://localhost:5000/api/notifications/regulator/reg-1');
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Notifications data:', data);
+        setRegulatorNotifications(data.notifications || []);
+      } else {
+        console.error('Failed to fetch notifications:', response.status);
+        setRegulatorNotifications([]);
+      }
+    } catch (error) {
+      console.error('Error fetching regulator notifications:', error);
+      setRegulatorNotifications([]);
+    }
+  }, []);
+
+  const approveSubmission = async () => {
+    if (!selectedPendingSubmission) return;
+    
+    setIsApproving(true);
+    try {
+      const response = await fetch('http://localhost:5000/api/regulator/approve-submission', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          submission_id: selectedPendingSubmission.id,
+          comments: approvalComments || 'Approved by regulator'
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (response.ok) {
+        toast.success('Submission Approved!', {
+          description: `Data hash ${selectedPendingSubmission.data_hash.substring(0, 8)}... has been approved.`
+        });
+        
+        fetchPendingSubmissions();
+        fetchRegulatorNotifications();
+        setSelectedPendingSubmission(null);
+        setApprovalComments('');
+      } else {
+        toast.error('Approval Failed', {
+          description: data.error || 'Failed to approve submission'
+        });
+      }
+    } catch (error) {
+      toast.error('Network Error', {
+        description: 'Could not connect to server'
+      });
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  const rejectSubmission = async () => {
+    if (!selectedPendingSubmission) return;
+    
+    setIsRejecting(true);
+    try {
+      const response = await fetch('http://localhost:5000/api/regulator/reject-submission', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          submission_id: selectedPendingSubmission.id,
+          comments: approvalComments || 'Submission rejected by regulator'
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (response.ok) {
+        toast.success('Submission Rejected', {
+          description: `Data hash ${selectedPendingSubmission.data_hash.substring(0, 8)}... has been rejected.`
+        });
+        
+        fetchPendingSubmissions();
+        fetchRegulatorNotifications();
+        setSelectedPendingSubmission(null);
+        setApprovalComments('');
+      } else {
+        toast.error('Rejection Failed', {
+          description: data.error || 'Failed to reject submission'
+        });
+      }
+    } catch (error) {
+      toast.error('Network Error', {
+        description: 'Could not connect to server'
+      });
+    } finally {
+      setIsRejecting(false);
+    }
+  };
 
   useEffect(() => {
     if (fetchReviews && fetchSubmissions) {
       fetchReviews();
       fetchSubmissions();
     }
-  }, [fetchReviews, fetchSubmissions]);
+    
+    // Fetch new regulator data
+    fetchPendingSubmissions();
+    fetchRegulatorNotifications();
+    
+    // Refresh data every 30 seconds
+    const interval = setInterval(() => {
+      fetchPendingSubmissions();
+      fetchRegulatorNotifications();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [fetchReviews, fetchSubmissions, fetchRegulatorNotifications, user]);
 
   // Enhanced data processing
   const anonymizedData = useMemo(() => 
-    submissions.map(s => ({
+    submissions ? submissions.map(s => ({
       ...s,
       insurerId: `INS-${(s.id.charCodeAt(s.id.length - 1) % 5) + 101}`,
       solvencyRatio: s.capital / s.liabilities
-    })), [submissions]);
+    })) : [], [submissions]);
 
   const filteredData = useMemo(() => 
     anonymizedData.filter(s => 
@@ -132,7 +303,6 @@ export function AuditDashboardPage() {
   };
 
   const handleExportReport = (format: 'pdf' | 'csv') => {
-    // Mock export functionality
     toast.success(`Exporting ${format.toUpperCase()} report...`);
   };
 
@@ -148,6 +318,9 @@ export function AuditDashboardPage() {
       approved: { variant: 'default' as const, className: 'bg-green-100 text-green-800' },
       rejected: { variant: 'destructive' as const, className: 'bg-red-100 text-red-800' },
       requires_clarification: { variant: 'secondary' as const, className: 'bg-orange-100 text-orange-800' },
+      'INSURER_SUBMITTED': { variant: 'outline' as const, className: 'bg-blue-100 text-blue-800' },
+      'REGULATOR_APPROVED': { variant: 'default' as const, className: 'bg-green-100 text-green-800' },
+      'REJECTED': { variant: 'destructive' as const, className: 'bg-red-100 text-red-800' },
     };
 
     const config = statusConfig[displayStatus as keyof typeof statusConfig] || statusConfig.pending;
@@ -163,12 +336,16 @@ export function AuditDashboardPage() {
     switch (status) {
       case 'approved':
       case 'Compliant':
+      case 'REGULATOR_APPROVED':
         return <CheckCircle className="h-4 w-4 text-green-600" />;
       case 'rejected':
       case 'Non-Compliant':
+      case 'REJECTED':
         return <XCircle className="h-4 w-4 text-red-600" />;
       case 'requires_clarification':
         return <AlertCircle className="h-4 w-4 text-orange-600" />;
+      case 'INSURER_SUBMITTED':
+        return <Clock className="h-4 w-4 text-blue-600" />;
       default:
         return <Eye className="h-4 w-4 text-gray-600" />;
     }
@@ -186,7 +363,7 @@ export function AuditDashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Audit Dashboard</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Regulatory Audit Dashboard</h1>
           <p className="text-muted-foreground">
             Comprehensive oversight and analysis tools for regulatory compliance
           </p>
@@ -203,17 +380,83 @@ export function AuditDashboardPage() {
         </div>
       </div>
 
+      {/* NEW: Notifications Banner - ✅ ULTRA SAFE VERSION */}
+      {Array.isArray(regulatorNotifications) && regulatorNotifications.length > 0 && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-blue-900">
+              <Bell className="h-5 w-5" />
+              Active Notifications
+              <Badge variant="secondary">{regulatorNotifications.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {regulatorNotifications.slice(0, 3).map((notification, index) => {
+                // ✅ COMPLETELY SAFE WITH MULTIPLE FALLBACKS
+                if (!notification) return null;
+                
+                const notificationId = notification.id || `notification-${index}`;
+                const notificationMessage = notification.message || 'No message available';
+                const notificationUrgency = notification.urgency || 'Medium';
+                const senderUsername = (notification.sender && notification.sender.username) || 'System';
+                
+                return (
+                  <div key={notificationId} className="flex items-center justify-between p-2 bg-white rounded border">
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">{notificationMessage}</p>
+                      <p className="text-xs text-muted-foreground">
+                        From: {senderUsername}
+                      </p>
+                    </div>
+                    <Badge variant={notificationUrgency === 'High' ? 'destructive' : 'secondary'}>
+                      {notificationUrgency}
+                    </Badge>
+                  </div>
+                );
+              }).filter(Boolean)}
+              {regulatorNotifications.length > 3 && (
+                <p className="text-xs text-muted-foreground text-center">
+                  +{regulatorNotifications.length - 3} more notifications...
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="overview">Overview & Analytics</TabsTrigger>
+          <TabsTrigger value="approvals" className="relative">
+            Regulatory Approvals
+            {pendingSubmissions.length > 0 && (
+              <Badge variant="destructive" className="ml-2 h-5 w-5 p-0 text-xs">
+                {pendingSubmissions.length}
+              </Badge>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="submissions">Detailed Submissions</TabsTrigger>
           <TabsTrigger value="reviews">Reviews Management</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
           <div className="space-y-6">
-            {/* Key Metrics Cards */}
-            <div className="grid gap-6 md:grid-cols-3">
+            {/* Key Metrics Cards - Include pending submissions count */}
+            <div className="grid gap-6 md:grid-cols-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Clock className="h-5 w-5" />
+                    Pending Approvals
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col items-center justify-center h-[120px]">
+                  <p className="text-4xl font-bold text-orange-600">{pendingSubmissions.length}</p>
+                  <p className="text-muted-foreground">awaiting review</p>
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -305,6 +548,178 @@ export function AuditDashboardPage() {
           </div>
         </TabsContent>
 
+        {/* NEW: Regulatory Approvals Tab - ✅ FIXED SAFE PROPERTY ACCESS */}
+        <TabsContent value="approvals">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Hash className="h-5 w-5" />
+                  Pending Submissions for Regulatory Approval
+                  <Badge variant="outline">{pendingSubmissions.length}</Badge>
+                </CardTitle>
+                <CardDescription>
+                  Two-stage approval workflow: Insurer submission → Regulator approval
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {Array.isArray(pendingSubmissions) && pendingSubmissions.length > 0 ? (
+                    pendingSubmissions.map((submission, index) => {
+                      // ✅ COMPLETELY SAFE SUBMISSION HANDLING
+                      if (!submission) return null;
+                      
+                      const submissionId = submission.id || `submission-${index}`;
+                      const insurerUsername = (submission.insurer && submission.insurer.username) || 'Unknown Insurer';
+                      const insurerEmail = (submission.insurer && submission.insurer.email) || 'N/A';
+                      const dataHash = submission.data_hash || 'N/A';
+                      const capital = submission.capital || 0;
+                      const liabilities = submission.liabilities || 0;
+                      const solvencyRatio = submission.solvency_ratio || 0;
+                      const submissionDate = submission.submission_date;
+                      const status = submission.status || 'UNKNOWN';
+                      
+                      return (
+                        <div key={submissionId} className="border rounded-lg p-4 bg-gradient-to-r from-blue-50 to-white">
+                          <div className="flex justify-between items-start mb-3">
+                            <div>
+                              <h4 className="font-medium text-lg">{insurerUsername}</h4>
+                              <p className="text-sm text-muted-foreground flex items-center gap-1">
+                                <Hash className="h-3 w-3" />
+                                Data Hash: <code className="bg-gray-100 px-1 rounded text-xs">{dataHash.substring(0, 20)}...</code>
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Email: {insurerEmail}
+                              </p>
+                            </div>
+                            <div className="flex flex-col items-end gap-2">
+                              {getStatusBadge(status)}
+                              <span className="text-xs text-muted-foreground">
+                                {submissionDate ? new Date(submissionDate).toLocaleDateString() : 'N/A'}
+                              </span>
+                            </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 p-3 bg-white rounded border">
+                            <div>
+                              <label className="text-xs text-muted-foreground font-medium">Capital (KES)</label>
+                              <p className="font-bold text-green-600">{capital.toLocaleString()}</p>
+                            </div>
+                            <div>
+                              <label className="text-xs text-muted-foreground font-medium">Liabilities (KES)</label>
+                              <p className="font-bold text-red-600">{liabilities.toLocaleString()}</p>
+                            </div>
+                            <div>
+                              <label className="text-xs text-muted-foreground font-medium">Solvency Ratio</label>
+                              <p className={`font-bold text-lg ${solvencyRatio >= 100 ? 'text-green-600' : 'text-red-600'}`}>
+                                {solvencyRatio}%
+                              </p>
+                            </div>
+                            <div>
+                              <label className="text-xs text-muted-foreground font-medium">Risk Level</label>
+                              <Badge variant={solvencyRatio >= 100 ? 'default' : 'destructive'}>
+                                {solvencyRatio >= 100 ? 'Low Risk' : 'High Risk'}
+                              </Badge>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2">
+                            <Dialog>
+                              <DialogTrigger asChild>
+                                <Button 
+                                  variant="default" 
+                                  size="sm"
+                                  onClick={() => setSelectedPendingSubmission(submission)}
+                                  className="bg-green-600 hover:bg-green-700"
+                                >
+                                  <CheckCircle className="h-4 w-4 mr-2" />
+                                  Review & Approve
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent className="max-w-3xl">
+                                <DialogHeader>
+                                  <DialogTitle className="flex items-center gap-2">
+                                    <FileCheck className="h-5 w-5" />
+                                    Regulatory Review & Approval
+                                  </DialogTitle>
+                                  <DialogDescription>
+                                    Complete the two-stage approval process for this financial submission
+                                  </DialogDescription>
+                                </DialogHeader>
+                                
+                                {selectedPendingSubmission && (
+                                  <div className="space-y-6">
+                                    <div className="grid grid-cols-2 gap-6 p-4 bg-gray-50 rounded-lg">
+                                      <div className="space-y-3">
+                                        <div>
+                                          <label className="text-sm font-medium text-gray-700">Insurer Details</label>
+                                          <p className="font-semibold">{(selectedPendingSubmission.insurer && selectedPendingSubmission.insurer.username) || 'Unknown'}</p>
+                                          <p className="text-sm text-gray-600">{(selectedPendingSubmission.insurer && selectedPendingSubmission.insurer.email) || 'No email'}</p>
+                                        </div>
+                                      </div>
+                                      <div className="space-y-3">
+                                        <div>
+                                          <label className="text-sm font-medium text-gray-700">Data Hash</label>
+                                          <p className="text-xs font-mono bg-gray-200 p-2 rounded break-all">
+                                            {selectedPendingSubmission.data_hash || 'No hash'}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    
+                                    <div>
+                                      <label className="text-sm font-medium">Regulatory Decision Comments</label>
+                                      <Textarea 
+                                        value={approvalComments}
+                                        onChange={(e) => setApprovalComments(e.target.value)}
+                                        placeholder="Provide regulatory comments and reasoning for your decision..."
+                                        className="mt-2 min-h-[100px]"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                <DialogFooter className="gap-2">
+                                  <Button 
+                                    variant="outline"
+                                    onClick={() => setSelectedPendingSubmission(null)}
+                                  >
+                                    Cancel
+                                  </Button>
+                                  <Button 
+                                    variant="destructive" 
+                                    onClick={rejectSubmission}
+                                    disabled={isRejecting || isApproving}
+                                  >
+                                    {isRejecting ? 'Rejecting...' : 'Reject Submission'}
+                                  </Button>
+                                  <Button 
+                                    onClick={approveSubmission}
+                                    disabled={isApproving || isRejecting}
+                                    className="bg-green-600 hover:bg-green-700"
+                                  >
+                                    {isApproving ? 'Approving...' : 'Approve Submission'}
+                                  </Button>
+                                </DialogFooter>
+                              </DialogContent>
+                            </Dialog>
+                          </div>
+                        </div>
+                      );
+                    }).filter(Boolean)
+                  ) : (
+                    <div className="text-center py-12 text-muted-foreground">
+                      <FileCheck className="mx-auto h-12 w-12 mb-4" />
+                      <h3 className="text-lg font-medium mb-2">No Pending Approvals</h3>
+                      <p>All submissions have been processed or no new submissions are awaiting approval.</p>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
         <TabsContent value="submissions">
           <Card>
             <CardHeader>
@@ -336,18 +751,6 @@ export function AuditDashboardPage() {
                     <SelectItem value="Non-Compliant">Non-Compliant</SelectItem>
                   </SelectContent>
                 </Select>
-
-                <Select value={dateRangeFilter} onValueChange={setDateRangeFilter}>
-                  <SelectTrigger className="w-[180px]">
-                    <SelectValue placeholder="Date range" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Dates</SelectItem>
-                    <SelectItem value="last7days">Last 7 days</SelectItem>
-                    <SelectItem value="last30days">Last 30 days</SelectItem>
-                    <SelectItem value="last90days">Last 90 days</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
 
               {filteredData && filteredData.length > 0 ? (
@@ -371,16 +774,16 @@ export function AuditDashboardPage() {
                             {submission.insurerId}
                           </TableCell>
                           <TableCell>
-                            {format(new Date(submission.submittedAt), 'PPP')}
+                            {submission.submittedAt ? format(new Date(submission.submittedAt), 'PPP') : 'No date'}
                           </TableCell>
                           <TableCell>
-                            {submission.capital.toLocaleString()}
+                            {submission.capital?.toLocaleString() || '0'}
                           </TableCell>
                           <TableCell>
-                            {submission.liabilities.toLocaleString()}
+                            {submission.liabilities?.toLocaleString() || '0'}
                           </TableCell>
                           <TableCell className="font-medium">
-                            {submission.solvencyRatio.toFixed(2)}
+                            {submission.solvencyRatio?.toFixed(2) || '0.00'}
                           </TableCell>
                           <TableCell>
                             {getStatusBadge(submission.status, submission.solvencyRatio)}
@@ -448,7 +851,7 @@ export function AuditDashboardPage() {
                             {format(new Date(review.createdAt), 'PPP')}
                           </TableCell>
                           <TableCell>
-                            {review.reviewerName}
+                            {review.reviewerName || 'Unknown'}
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
@@ -458,7 +861,7 @@ export function AuditDashboardPage() {
                           </TableCell>
                           <TableCell className="max-w-md">
                             <div className="truncate" title={review.comments}>
-                              {review.comments}
+                              {review.comments || 'No comments'}
                             </div>
                           </TableCell>
                         </TableRow>
@@ -477,7 +880,7 @@ export function AuditDashboardPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Review Dialog - keeping your existing working dialog */}
+      {/* Review Dialog */}
       {selectedSubmission && (
         <Dialog open={true} onOpenChange={(open) => !open && handleCloseDialog()}>
           <DialogContent className="sm:max-w-[525px]">
