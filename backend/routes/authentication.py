@@ -107,8 +107,8 @@ def register_auth_routes(app):
                     'error': 'No data provided'
                 }), 400
             
-            # Handle both email field names
-            email = data.get('business_email') or data.get('email') or data.get('username')
+            # ✅ HANDLE BOTH EMAIL FIELD NAMES from frontend
+            email = data.get('email') or data.get('business_email') or data.get('username')
             password = data.get('password')
             
             print(f"👤 Email/Username: {email}")
@@ -133,7 +133,7 @@ def register_auth_routes(app):
                     'error': 'Invalid email or password'
                 }), 401
             
-            print(f"✅ User: {user.username}, Email: {user.email}, Role: {user.role.value}")
+            print(f"✅ User: {user.username}, Email: {user.email}, Role: {user.role.value}, ID: {user.id}")
             
             # Check password
             password_valid = check_password_hash(user.password_hash, password)
@@ -145,24 +145,25 @@ def register_auth_routes(app):
                     'error': 'Invalid email or password'
                 }), 401
             
-            # ✅ SUCCESSFUL LOGIN - Use username as business_name
+            # ✅ SUCCESSFUL LOGIN with clear user ID
             response_data = {
                 'success': True,
                 'message': 'Login successful',
                 'user': {
-                    'id': user.id,
+                    'id': user.id,  # ✅ This is the key field for user-specific endpoints
                     'username': user.username,
-                    'business_name': user.username,  # ✅ Use username as business name
+                    'business_name': user.username,
                     'business_email': user.email,
                     'email': user.email,
                     'role': user.role.value
                 },
-                'token': f'mock_jwt_token_{user.id}_{datetime.utcnow().timestamp()}'  # Mock JWT token
+                'user_id': user.id,  # ✅ Add this for easy access
+                'token': f'mock_jwt_token_{user.id}_{datetime.utcnow().timestamp()}'
             }
             
-            print(f"✅ Login successful: {response_data}")
+            print(f"✅ Login successful for user ID {user.id}: {response_data}")
             return jsonify(response_data), 200
-                
+            
         except Exception as e:
             print(f"❌ Login error: {str(e)}")
             import traceback

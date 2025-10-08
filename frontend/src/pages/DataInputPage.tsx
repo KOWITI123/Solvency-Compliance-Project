@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -55,6 +55,13 @@ export function DataInputPage() {
   const [isSubmissionComplete, setIsSubmissionComplete] = useState(false);
   const addSubmission = useDataStore((state) => state.addSubmission);
   const navigate = useNavigate();
+
+  // ✅ TEMPORARY DEBUG: Check current user
+  React.useEffect(() => {
+    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    console.log('🔍 Debug - Current user in DataInputPage:', currentUser);
+    console.log('🆔 Debug - User ID:', currentUser.id);
+  }, []);
 
   const form = useForm<DataInputFormValues>({
     resolver: zodResolver(dataInputSchema),
@@ -124,9 +131,22 @@ export function DataInputPage() {
       return;
     }
 
-    // ✅ PREPARE DATA FOR BLOCKCHAIN SUBMISSION (Raw data only)
+    // ✅ GET CURRENT USER ID FROM STORED LOGIN DATA
+    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    const userId = currentUser.id;
+    
+    console.log('👤 Current user from localStorage:', currentUser);
+    console.log('🆔 Using user ID for submission:', userId);
+    
+    if (!userId) {
+      toast.error('Please log in to submit data');
+      setIsLoading(false);
+      return;
+    }
+
+    // ✅ PREPARE DATA FOR BLOCKCHAIN SUBMISSION (Use actual user ID)
     const blockchainData = {
-      insurer_id: 1, // This should come from user context in a real app
+      insurer_id: userId,  // ✅ FIXED: Use actual logged-in user ID instead of hardcoded 1
       capital,
       liabilities,
       submission_date: values.date.toISOString(),
