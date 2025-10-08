@@ -63,19 +63,22 @@ export function SignUpPage() {
       const data = await response.json();
       console.log('Response data:', data);
 
-      if (response.ok) {
+      // ✅ IMPROVED SUCCESS CHECK
+      if (response.ok && data.success) {
         // Success - call auth store
         signup({
-          username: data.business_email,
-          businessName: data.business_name,
-          registrationNumber: data.registration_number,
+          username: data.user.business_email,  // ✅ Use data.user.business_email
+          businessName: data.user.business_name,  // ✅ Use data.user.business_name
+          registrationNumber: data.user.registration_number,  // ✅ Use data.user.registration_number
         });
 
         toast.success('Registration successful!', {
           description: 'You can now log in with your new account.',
         });
         
-        navigate('/login');
+        // ✅ NAVIGATE TO CORRECT LOGIN ROUTE
+        navigate('/login');  // ✅ Changed from '/signin' to '/login'
+        
       } else {
         // API returned an error
         console.error('API Error:', data.error);

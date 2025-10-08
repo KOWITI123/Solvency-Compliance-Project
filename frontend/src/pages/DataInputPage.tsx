@@ -173,11 +173,6 @@ export function DataInputPage() {
           description: `Your submission is now pending regulator approval. Hash: ${blockchainResult.data_hash.substring(0, 16)}...`,
         });
         
-        // Auto-redirect after 5 seconds to show the status
-        setTimeout(() => {
-          navigate('/app/status');
-        }, 5000);
-        
       } else {
         throw new Error('Blockchain submission failed');
       }
@@ -328,7 +323,8 @@ export function DataInputPage() {
                 <Eye className="mr-2 h-4 w-4" />
                 View Submission Status
               </Button>
-              <Button onClick={() => navigate('/app/blockchain')} variant="outline">
+              <Button onClick={() => navigate('/app/blockchain-log')} variant="outline">
+                {/* ✅ FIXED: Changed from '/app/blockchain' to '/app/blockchain-log' */}
                 <Hash className="mr-2 h-4 w-4" />
                 View Blockchain Log
               </Button>
