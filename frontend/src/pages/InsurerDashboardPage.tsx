@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -40,15 +40,25 @@ export function InsurerDashboardPage() {
 
   const fetchSubmissionHistory = useCallback(async () => {
     try {
-      const userData = JSON.parse(localStorage.getItem('user') || '{}');
-      const userId = user?.id || userData?.id || 1;
+      // ✅ FIX: Get current user ID properly
+      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      const userId = currentUser.id;
       
-      const response = await fetch(`http://localhost:5000/api/insurer/submission-history?user_id=${userId}`);
+      console.log('👤 Dashboard fetching for user ID:', userId);
+      
+      if (!userId) {
+        console.error('❌ No user ID found');
+        setSubmissionHistory([]);
+        return;
+      }
+      
+      // ✅ FIX: Use user-specific endpoint
+      const response = await fetch(`http://localhost:5000/api/submissions/user/${userId}`);
       
       if (response.ok) {
         const data = await response.json();
+        console.log('📊 Fetched user submission history:', data);
         setSubmissionHistory(data.submissions || []);
-        console.log('📊 Fetched submission history:', data.submissions);
       } else {
         console.log('No submission history found or endpoint not available');
         setSubmissionHistory([]);
@@ -57,27 +67,32 @@ export function InsurerDashboardPage() {
       console.error('Error fetching history:', error);
       setSubmissionHistory([]);
     }
-  }, [user]);
+  }, []);
 
   useEffect(() => {
     fetchSubmissionHistory();
   }, [fetchSubmissionHistory]);
 
-  const filteredSubmissions = allSubmissions
+  // Replace the filteredSubmissions, chartData, and related calculations with user-specific data:
+
+  // ✅ FIX: Use submissionHistory (user-specific) instead of allSubmissions (all users)
+  const filteredSubmissions = submissionHistory
     .slice()
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    .sort((a, b) => new Date(a.submission_date || a.created_at).getTime() - new Date(b.submission_date || b.created_at).getTime())
     .slice(-parseInt(timeRange));
 
+  // ✅ FIX: Generate chartData from user-specific submissions
   const chartData = filteredSubmissions.map(s => ({
-    date: format(new Date(s.date), 'yyyy-MM-dd'),
-    solvencyRatio: s.solvencyRatio,
-    capital: s.capital,
-    liabilities: s.liabilities,
-    status: s.status,
+    date: format(new Date(s.submission_date || s.created_at), 'yyyy-MM-dd'),
+    solvencyRatio: s.solvency_ratio || 0,
+    capital: s.capital || 0,
+    liabilities: s.liabilities || 0,
+    status: s.status === 'REGULATOR_APPROVED' ? 'Compliant' : 'Non-Compliant',
   }));
 
+  // ✅ FIX: Calculate compliance from user-specific data
   const complianceDistribution = filteredSubmissions.reduce((acc, s) => {
-    if (s.status === 'Compliant') acc[0].value += 1;
+    if (s.status === 'REGULATOR_APPROVED') acc[0].value += 1;
     else acc[1].value += 1;
     return acc;
   }, [
@@ -85,9 +100,17 @@ export function InsurerDashboardPage() {
     { name: 'Non-Compliant', value: 0 },
   ]);
 
+  // ✅ FIX: Calculate average from user-specific data
   const averageSolvencyRatio = filteredSubmissions.length > 0
-    ? filteredSubmissions.reduce((sum, s) => sum + s.solvencyRatio, 0) / filteredSubmissions.length
+    ? filteredSubmissions.reduce((sum, s) => sum + (s.solvency_ratio || 0), 0) / filteredSubmissions.length
     : 0;
+
+  // ✅ FIX: Get latest status from user-specific data
+  const userLatestStatus = submissionHistory.length > 0 
+    ? submissionHistory
+        .filter(s => s.status === 'REGULATOR_APPROVED')
+        .sort((a, b) => new Date(b.regulator_approved_at || b.created_at).getTime() - new Date(a.regulator_approved_at || a.created_at).getTime())[0]
+    : null;
 
   const handleExport = () => {
     if (chartData.length === 0) {
@@ -129,18 +152,22 @@ export function InsurerDashboardPage() {
     setIsSubmitting(true);
 
     try {
-      const userData = JSON.parse(localStorage.getItem('user') || '{}');
+      // ✅ FIX: Get current user ID properly
+      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      const userId = currentUser.id;
+      
+      console.log('👤 Using user ID for submission:', userId);
+      
       const payload = {
         capital: parseFloat(capital),
         liabilities: parseFloat(liabilities),
-        insurer_id: user?.id || userData?.id || 1,
+        insurer_id: userId, // ✅ FIX: Use actual current user ID
         comments: comments,
       };
       
       console.log('📦 Payload being sent:', payload);
       console.log('📡 Making API call to: http://localhost:5000/api/insurer/submit-data');
 
-      // ✅ SIMPLIFIED FETCH - REMOVE CLIENT-SIDE CORS HEADERS
       const response = await fetch('http://localhost:5000/api/insurer/submit-data', {
         method: 'POST',
         headers: {
@@ -190,14 +217,17 @@ export function InsurerDashboardPage() {
   const testBlockchainAPI = async () => {
     console.log('🧪 Testing API call directly...');
     try {
-      const userData = JSON.parse(localStorage.getItem('user') || '{}');
+      // ✅ FIX: Get current user ID properly
+      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      const userId = currentUser.id;
+      
       const response = await fetch('http://localhost:5000/api/insurer/submit-data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           capital: 1000000,
           liabilities: 800000,
-          insurer_id: user?.id || userData?.id || 1,
+          insurer_id: userId, // ✅ FIX: Use actual current user ID
           comments: 'Test submission'
         })
       });
@@ -229,129 +259,37 @@ export function InsurerDashboardPage() {
         <h1 className="text-3xl font-bold tracking-tight">Insurer Dashboard</h1>
         <div className="text-sm text-muted-foreground flex items-center gap-2">
           <FaUser className="h-4 w-4" />
-          Welcome, {user?.username || 'User'}
+          Welcome, {user?.username || JSON.parse(localStorage.getItem('currentUser') || '{}')?.username || 'User'}
         </div>
       </div>
 
-      {/* Stats Cards - ✅ FIXED ICON CONSISTENCY */}
+      {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
           title="Latest Capital"
-          value={`KES ${latestStatus?.capital?.toLocaleString() || '0'}`}
+          value={`KES ${userLatestStatus?.capital?.toLocaleString() || '0'}`}
           icon={<FaDollarSign />}
           description="Current capital amount"
         />
         <StatCard
           title="Latest Liabilities"
-          value={`KES ${latestStatus?.liabilities?.toLocaleString() || '0'}`}
-          // ✅ REMOVE <> wrapper
+          value={`KES ${userLatestStatus?.liabilities?.toLocaleString() || '0'}`}
           icon={<FaFileAlt />}
           description="Current liabilities"
         />
         <StatCard
           title="Solvency Ratio"
-          value={`${latestStatus?.solvencyRatio?.toFixed(2) || '0'}%`}
+          value={`${userLatestStatus?.solvency_ratio?.toFixed(2) || '0'}%`}
           icon={<FaChartLine />} 
           description="Current solvency status"
         />
         <StatCard
           title="Compliance Status"
-          value={latestStatus?.status || 'Unknown'}
+          value={userLatestStatus?.status === 'REGULATOR_APPROVED' ? 'Compliant' : 'Unknown'}
           icon={<FaShieldAlt />}
           description="Latest compliance check"
         />
       </div>
-
-      {/* Blockchain Submission Form */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FaFileAlt className="h-5 w-5" />
-            Submit Financial Data with Blockchain Verification
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Submit your financial data for blockchain verification and two-way authentication
-          </p>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm font-medium mb-2 flex items-center gap-2">
-                  <FaDollarSign className="h-4 w-4" />
-                  Capital (KES) *
-                </label>
-                <input
-                  type="number"
-                  value={capital}
-                  onChange={(e) => setCapital(e.target.value)}
-                  placeholder="Enter capital amount"
-                  className="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  required
-                />
-              </div>
-              
-              <div>
-                <label className="text-sm font-medium mb-2 flex items-center gap-2">
-                  <FaTimes className="h-4 w-4" />
-                  Liabilities (KES) *
-                </label>
-                <input
-                  type="number"
-                  value={liabilities}
-                  onChange={(e) => setLiabilities(e.target.value)}
-                  placeholder="Enter liabilities amount"
-                  className="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  required
-                />
-              </div>
-            </div>
-            
-            <div>
-              <label className="text-sm font-medium mb-2 flex items-center gap-2">
-                <FaFileAlt className="h-4 w-4" />
-                Comments (Optional)
-              </label>
-              <textarea
-                value={comments}
-                onChange={(e) => setComments(e.target.value)}
-                placeholder="Add any comments about this submission"
-                className="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                rows={3}
-              />
-            </div>
-            
-            <div className="flex gap-4">
-              <Button 
-                type="submit" 
-                disabled={isSubmitting} 
-                className="flex-1 bg-blue-600 hover:bg-blue-700"
-              >
-                {isSubmitting ? (
-                  <>
-                    <FaChartLine className="mr-2 h-4 w-4 animate-spin" />
-                    Submitting to Blockchain...
-                  </>
-                ) : (
-                  <>
-                    <FaCheck className="mr-2 h-4 w-4" />
-                    Submit Financial Data ⛓️
-                  </>
-                )}
-              </Button>
-              
-              <Button 
-                type="button"
-                onClick={testBlockchainAPI}
-                variant="outline"
-                className="px-6"
-              >
-                🧪 Test API
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
 
       {/* Submission History */}
       {submissionHistory.length > 0 && (
