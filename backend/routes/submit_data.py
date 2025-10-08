@@ -4,6 +4,7 @@ from database.db_connection import db
 from database.models import DataSubmission, SubmissionStatus, Notification, NotificationStatus, NotificationUrgency
 from utils.blockchain_verification import SimpleBlockchainVerification
 import json
+import hashlib
 
 def register_submission_routes(app):
     """Register all submission-related routes with blockchain verification"""
@@ -56,18 +57,26 @@ def register_submission_routes(app):
             db.session.add(submission)
             print(f"📝 Submission record created")
             
-            # Create notification for regulator
-            notification = Notification(
-                sender_id=int(data['insurer_id']),
-                recipient_id=1,  # Regulator ID
-                message=f"🔗 CFO Submitted: Capital: {data['capital']:,}, Liabilities: {data['liabilities']:,}, Solvency: {blockchain_data['solvency_ratio']:.2f}%. Hash: {blockchain_data['submission_hash'][:8]}... [AWAITING REGULATOR APPROVAL]",
-                urgency=NotificationUrgency.Medium,
-                status=NotificationStatus.Sent,
-                sent_at=datetime.utcnow()
-            )
-            
-            db.session.add(notification)
-            print(f"📬 Notification created for regulator")
+            # Create notification for regulator (using actual table structure)
+            try:
+                notification_message = f"🔗 CFO Submitted: Capital: {data['capital']:,}, Liabilities: {data['liabilities']:,}, Solvency: {blockchain_data['solvency_ratio']:.2f}%. Hash: {blockchain_data['submission_hash'][:8]}... [AWAITING REGULATOR APPROVAL]"
+                
+                # ✅ USE SIMPLE STRING VALUES INSTEAD OF ENUM
+                new_notification = Notification(
+                    recipient_id=1,  # Regulator ID as integer
+                    sender_id=int(data['insurer_id']),  # Insurer ID as integer
+                    message=notification_message,
+                    urgency='Medium',  # ✅ Use string instead of NotificationUrgency.Medium
+                    status='Unread',   # ✅ Use string instead of NotificationStatus.Sent
+                    sent_at=datetime.utcnow()
+                )
+                
+                db.session.add(new_notification)
+                print(f"📬 Notification created for regulator")
+                
+            except Exception as notif_error:
+                print(f"⚠️ Could not create notification: {notif_error}")
+                # Continue without failing the submission
             
             db.session.commit()
             print(f"💾 Database committed successfully")
@@ -124,89 +133,109 @@ def register_submission_routes(app):
             print(f"❌ Error fetching submission history: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
-    @app.route('/api/submissions', methods=['GET'])
-    def get_all_submissions():
-        """Get all financial submissions for blockchain log"""
+    @app.route('/api/submit-data', methods=['POST'])
+    def submit_data():
+        """Submit financial data for regulator approval (DataInputPage)"""
         try:
-            print("📊 Fetching all submissions for blockchain log...")
+            data = request.get_json()
+            print(f"📊 Received submission data from DataInputPage: {data}")
             
-            # First, let's check what model we should use
-            # Try DataSubmission first
-            try:
-                submissions = DataSubmission.query.order_by(
-                    DataSubmission.insurer_submitted_at.desc()
-                ).all()
-                
-                submissions_data = []
-                for submission in submissions:
-                    # Check if submission has regulator fields, if not use None
-                    regulator_processed_at = getattr(submission, 'regulator_processed_at', None)
-                    regulator_comments = getattr(submission, 'regulator_comments', None)
-                    
-                    submissions_data.append({
-                        'id': submission.id,
-                        'data_hash': submission.data_hash,
-                        'capital': submission.capital,
-                        'liabilities': submission.liabilities,
-                        'solvency_ratio': submission.solvency_ratio,
-                        'status': submission.status.value if hasattr(submission.status, 'value') else str(submission.status),
-                        'insurer_submitted_at': submission.insurer_submitted_at.isoformat() if submission.insurer_submitted_at else None,
-                        'regulator_processed_at': regulator_processed_at.isoformat() if regulator_processed_at else None,
-                        'regulator_comments': regulator_comments,
-                        'insurer_id': submission.insurer_id
-                    })
-                
-                print(f"✅ Found {len(submissions_data)} submissions for blockchain log")
-                
-                return jsonify({
-                    'success': True,
-                    'submissions': submissions_data,
-                    'total_count': len(submissions_data)
-                }), 200
-                
-            except Exception as inner_e:
-                print(f"⚠️ DataSubmission query failed: {str(inner_e)}")
-                
-                # Try FinancialSubmission as fallback
-                try:
-                    from database.models import FinancialSubmission
-                    
-                    submissions = FinancialSubmission.query.order_by(
-                        FinancialSubmission.insurer_submitted_at.desc()
-                    ).all()
-                    
-                    submissions_data = []
-                    for submission in submissions:
-                        submissions_data.append({
-                            'id': submission.id,
-                            'data_hash': submission.data_hash,
-                            'capital': submission.capital,
-                            'liabilities': submission.liabilities,
-                            'solvency_ratio': submission.solvency_ratio,
-                            'status': submission.status.value if hasattr(submission.status, 'value') else str(submission.status),
-                            'insurer_submitted_at': submission.insurer_submitted_at.isoformat() if submission.insurer_submitted_at else None,
-                            'regulator_processed_at': submission.regulator_processed_at.isoformat() if submission.regulator_processed_at else None,
-                            'regulator_comments': submission.regulator_comments,
-                            'insurer_id': submission.insurer_id
-                        })
-                    
-                    print(f"✅ Found {len(submissions_data)} submissions (FinancialSubmission) for blockchain log")
-                    
+            # Validate required fields
+            required_fields = ['insurer_id', 'capital', 'liabilities', 'submission_date']
+            for field in required_fields:
+                if field not in data:
                     return jsonify({
-                        'success': True,
-                        'submissions': submissions_data,
-                        'total_count': len(submissions_data)
-                    }), 200
-                    
-                except Exception as financial_e:
-                    print(f"❌ FinancialSubmission query also failed: {str(financial_e)}")
-                    raise inner_e
+                        'success': False,
+                        'error': f'Missing required field: {field}'
+                    }), 400
             
-        except Exception as e:
-            print(f"❌ Error fetching submissions: {str(e)}")
+            # Extract and validate data
+            insurer_id = data['insurer_id']
+            capital = float(data['capital'])
+            liabilities = float(data['liabilities'])
+            submission_date = data['submission_date']
+            
+            if capital <= 0 or liabilities <= 0:
+                return jsonify({
+                    'success': False,
+                    'error': 'Capital and liabilities must be positive numbers'
+                }), 400
+            
+            # ✅ CREATE DATA HASH
+            data_string = f"{insurer_id}:{capital}:{liabilities}:{submission_date}"
+            data_hash = hashlib.sha256(data_string.encode()).hexdigest()
+            
+            # Parse submission date
+            try:
+                parsed_date = datetime.fromisoformat(submission_date.replace('Z', '+00:00'))
+            except:
+                parsed_date = datetime.utcnow()
+            
+            # ✅ CREATE SUBMISSION RECORD WITH PLACEHOLDER SOLVENCY RATIO  
+            new_submission = DataSubmission(
+                insurer_id=insurer_id,
+                capital=capital,
+                liabilities=liabilities,
+                solvency_ratio=0.0,  # ✅ Placeholder value (database requires non-null)
+                data_hash=data_hash,
+                status=SubmissionStatus.INSURER_SUBMITTED,
+                submission_date=parsed_date.date(),
+                insurer_submitted_at=parsed_date,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            
+            db.session.add(new_submission)
+            db.session.flush()  # Get the ID without committing
+            
+            print(f"✅ Created submission with ID: {new_submission.id} (solvency_ratio=0.0 placeholder, will be calculated during approval)")
+            
+            # ✅ CREATE NOTIFICATION FOR REGULATOR (without solvency ratio)
+            try:
+                notification_message = f"📄 New submission from Insurer {insurer_id} - Capital: KES {capital:,.0f}, Liabilities: KES {liabilities:,.0f} [AWAITING APPROVAL]"
+                
+                new_notification = Notification(
+                    recipient_id=1,  # Regulator ID as integer
+                    sender_id=int(insurer_id),  # Insurer ID as integer
+                    message=notification_message,
+                    urgency='Medium',
+                    status='Unread',
+                    sent_at=datetime.utcnow()
+                )
+                
+                db.session.add(new_notification)
+                db.session.commit()
+                
+                print(f"✅ Notification created for regulator (no solvency ratio yet)")
+                
+            except Exception as notif_error:
+                print(f"⚠️ Could not create notification: {notif_error}")
+                # Don't fail the submission if notification fails
+                db.session.rollback()
+                db.session.add(new_submission)  # Re-add the submission
+                db.session.commit()
+        
+            return jsonify({
+                'success': True,
+                'message': 'Financial data submitted successfully and awaiting regulator approval',
+                'transaction_id': new_submission.id,
+                'data_hash': data_hash,
+                'status': 'INSURER_SUBMITTED',
+                'note': 'Solvency ratio will be calculated during regulator approval'
+            }), 200
+            
+        except ValueError as e:
+            print(f"❌ Validation error: {str(e)}")
             return jsonify({
                 'success': False,
-                'error': f'Failed to fetch submissions: {str(e)}'
+                'error': f'Invalid data format: {str(e)}'
+            }), 400
+        except Exception as e:
+            print(f"❌ Error submitting data: {str(e)}")
+            db.session.rollback()
+            return jsonify({
+                'success': False,
+                'error': f'Failed to submit data: {str(e)}'
             }), 500
 
     print("✅ Submission routes registered successfully")
