@@ -62,16 +62,31 @@ export function BlockchainLogPage() {
     try {
       console.log('🔗 Fetching blockchain data from submissions...');
       
-      const response = await fetch('http://localhost:5000/api/submissions');
+      // ✅ GET CURRENT USER ID FROM LOCAL STORAGE OR CONTEXT
+      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      const userId = currentUser.id || currentUser.user_id;
+      
+      console.log('👤 Current user ID:', userId);
+      
+      if (!userId) {
+        console.error('❌ No user ID found - user not logged in');
+        toast.error('Please log in to view your blockchain transactions');
+        setSubmissions([]);
+        setLoading(false);
+        return;
+      }
+      
+      // ✅ USE USER-SPECIFIC ENDPOINT
+      const response = await fetch(`http://localhost:5000/api/submissions/user/${userId}`);
       
       if (response.ok) {
         const data = await response.json();
-        console.log('✅ Submissions data:', data);
+        console.log('✅ User-specific submissions data:', data);
         
         const submissionData = data.submissions || [];
         setSubmissions(submissionData);
         
-        // Calculate stats
+        // Calculate stats for current user only
         const approved = submissionData.filter((sub: BlockchainEntry) => 
           sub.status === 'REGULATOR_APPROVED'
         ).length;
@@ -94,9 +109,23 @@ export function BlockchainLogPage() {
           pendingTransactions: pending,
           averageSolvencyRatio: Math.round(avgSolvency)
         });
+        
+        console.log(`✅ Loaded ${submissionData.length} transactions for user ${userId}`);
       } else {
-        console.error('Failed to fetch submissions:', response.status);
-        setSubmissions([]);
+        console.error('Failed to fetch user submissions:', response.status);
+        if (response.status === 404) {
+          console.log('ℹ️ No submissions found for this user');
+          setSubmissions([]);
+          setStats({
+            totalTransactions: 0,
+            approvedTransactions: 0,
+            rejectedTransactions: 0,
+            pendingTransactions: 0,
+            averageSolvencyRatio: 0
+          });
+        } else {
+          toast.error('Failed to fetch your blockchain transactions');
+        }
       }
     } catch (error) {
       console.error('Error fetching blockchain data:', error);
@@ -235,10 +264,10 @@ export function BlockchainLogPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
             <Hash className="h-8 w-8" />
-            Blockchain Transaction Log
+            My Blockchain Transaction Log
           </h1>
           <p className="text-muted-foreground">
-            Immutable audit trail of all solvency compliance transactions
+            Your immutable audit trail of solvency compliance transactions
           </p>
         </div>
         <div className="flex gap-2">
@@ -457,7 +486,8 @@ export function BlockchainLogPage() {
           ) : (
             <div className="text-center py-12 text-muted-foreground">
               <Hash className="mx-auto h-12 w-12 mb-4" />
-              <p>No blockchain transactions found matching your filters</p>
+              <p>No blockchain transactions found for your account</p>
+              <p className="text-sm mt-2">Submit financial data to see your transaction history</p>
             </div>
           )}
         </CardContent>

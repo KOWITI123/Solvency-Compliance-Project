@@ -505,6 +505,100 @@ def check_solvency_constraint():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# Add these endpoints after your existing endpoints:
+
+@app.route('/api/submissions/user/<int:user_id>', methods=['GET'])
+def get_user_submissions(user_id):
+    """Get submissions for a specific user only"""
+    try:
+        print(f"📊 Fetching submissions for user ID: {user_id}")
+        
+        # Get submissions for this specific user only
+        user_submissions = DataSubmission.query.filter_by(insurer_id=user_id).order_by(DataSubmission.created_at.desc()).all()
+        
+        submissions_data = []
+        for submission in user_submissions:
+            # Get insurer info
+            insurer = User.query.get(submission.insurer_id)
+            
+            submission_data = {
+                'id': submission.id,
+                'insurer_id': submission.insurer_id,
+                'insurer_name': insurer.username if insurer else 'Unknown',
+                'capital': submission.capital,
+                'liabilities': submission.liabilities,
+                'solvency_ratio': submission.solvency_ratio,
+                'data_hash': submission.data_hash,
+                'status': submission.status.value,
+                'submission_date': submission.submission_date.isoformat() if submission.submission_date else None,
+                'insurer_submitted_at': submission.insurer_submitted_at.isoformat() if submission.insurer_submitted_at else None,
+                'regulator_approved_at': submission.regulator_approved_at.isoformat() if submission.regulator_approved_at else None,
+                'regulator_rejected_at': submission.regulator_rejected_at.isoformat() if submission.regulator_rejected_at else None,
+                'regulator_comments': submission.regulator_comments,
+                'created_at': submission.created_at.isoformat() if submission.created_at else None
+            }
+            submissions_data.append(submission_data)
+        
+        print(f"✅ Found {len(submissions_data)} submissions for user {user_id}")
+        
+        return jsonify({
+            'success': True,
+            'submissions': submissions_data,
+            'total_count': len(submissions_data),
+            'user_id': user_id
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error fetching user submissions: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/debug/check-user-submissions/<int:user_id>', methods=['GET'])
+def debug_check_user_submissions(user_id):
+    """Debug endpoint to check what submissions exist for a user"""
+    try:
+        print(f"🔍 Debug: Checking submissions for user ID: {user_id}")
+        
+        # Check if user exists
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({
+                'error': f'User {user_id} not found',
+                'user_exists': False
+            }), 404
+        
+        # Get all submissions for this user
+        submissions = DataSubmission.query.filter_by(insurer_id=user_id).all()
+        
+        # Get all submissions in system for comparison
+        all_submissions = DataSubmission.query.all()
+        
+        submission_summary = []
+        for sub in submissions:
+            submission_summary.append({
+                'id': sub.id,
+                'status': sub.status.value,
+                'capital': sub.capital,
+                'liabilities': sub.liabilities,
+                'created_at': sub.created_at.isoformat() if sub.created_at else None
+            })
+        
+        return jsonify({
+            'user_id': user_id,
+            'user_exists': True,
+            'username': user.username,
+            'user_email': user.email,
+            'user_submissions_count': len(submissions),
+            'user_submissions': submission_summary,
+            'total_submissions_in_system': len(all_submissions),
+            'all_insurer_ids_in_system': list(set([sub.insurer_id for sub in all_submissions]))
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     print("🚀 Starting Solvency Compliance Server...")
     

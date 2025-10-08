@@ -117,10 +117,14 @@ export function LoginPage() {
               description: `Welcome back, ${data.user.username}!`,
             });
             
-            localStorage.setItem('user', JSON.stringify(data.user));
+            // When login is successful, store complete user data
+            localStorage.setItem('currentUser', JSON.stringify(data.user));
+            localStorage.setItem('userToken', data.token);
+            
+            console.log('✅ Stored user data:', data.user);
             
             console.log('🧭 Navigating to /app');
-            navigate('/app');
+            navigate('/app/dashboard');
           } else {
             toast.error('Login Failed', {
               description: 'Failed to set user session.',
