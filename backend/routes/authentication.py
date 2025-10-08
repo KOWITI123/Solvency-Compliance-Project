@@ -1,32 +1,124 @@
 from flask import request, jsonify
 from database.db_connection import db
-from database.models import User, UserRole
+from database.models import User, UserRole  # ✅ Remove InsurerProfile import
 from werkzeug.security import check_password_hash, generate_password_hash
+from datetime import datetime
 
 def register_auth_routes(app):
     """Register authentication routes"""
     
-    @app.route('/api/login', methods=['POST', 'OPTIONS'])
-    def login():
+    @app.route('/api/signup', methods=['POST', 'OPTIONS'])
+    def signup():
+        """User signup endpoint"""
         if request.method == 'OPTIONS':
             return '', 200
             
         try:
-            print("🔍 Login attempt received")
+            print("📝 Signup request received")
             data = request.get_json()
-            print(f"📝 Request data: {data}")
+            print(f"📦 Signup data: {data}")
+            
+            # Basic validation
+            if not data:
+                return jsonify({
+                    'success': False,
+                    'error': 'No data provided'
+                }), 400
+            
+            # Extract signup data
+            business_name = data.get('business_name')
+            business_email = data.get('business_email')
+            registration_number = data.get('registration_number')
+            password = data.get('password')
+            role = data.get('role', 'insurer')
+            
+            # Validation
+            if not business_email or not password or not business_name:
+                return jsonify({
+                    'success': False,
+                    'error': 'Business name, email, and password are required'
+                }), 400
+            
+            # Check if user already exists
+            existing_user = User.query.filter(
+                (User.email == business_email) | (User.username == business_email)
+            ).first()
+            
+            if existing_user:
+                return jsonify({
+                    'success': False,
+                    'error': 'User with this email already exists'
+                }), 409
+            
+            # ✅ CREATE ONLY USER RECORD (store business info in username)
+            new_user = User(
+                username=business_name,  # ✅ Store business name in username
+                email=business_email,
+                password_hash=generate_password_hash(password),
+                role=UserRole.insurer if role == 'insurer' else UserRole.regulator
+            )
+            
+            db.session.add(new_user)
+            db.session.commit()
+            
+            print(f"✅ Created user: {new_user.username} with email: {new_user.email} and ID: {new_user.id}")
+            
+            # Return success response
+            response_data = {
+                'success': True,
+                'message': 'Account created successfully',
+                'user': {
+                    'id': new_user.id,
+                    'username': new_user.username,
+                    'business_name': business_name,
+                    'business_email': new_user.email,
+                    'registration_number': registration_number,  # ✅ Return but don't store (no table for it)
+                    'role': new_user.role.value
+                }
+            }
+            
+            print(f"✅ Signup successful: {response_data}")
+            return jsonify(response_data), 201
+            
+        except Exception as e:
+            db.session.rollback()
+            print(f"❌ Signup error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                'success': False,
+                'error': f'Signup failed: {str(e)}'
+            }), 500
+    
+    @app.route('/api/login', methods=['POST', 'OPTIONS'])
+    def login():
+        """User login endpoint"""
+        if request.method == 'OPTIONS':
+            return '', 200
+            
+        try:
+            print("🔐 Login request received")
+            data = request.get_json()
+            print(f"📦 Login data: {data}")
             
             if not data:
-                return jsonify({'error': 'No data provided'}), 400
+                return jsonify({
+                    'success': False,
+                    'error': 'No data provided'
+                }), 400
             
-            email = data.get('email') or data.get('username')
+            # Handle both email field names
+            email = data.get('business_email') or data.get('email') or data.get('username')
             password = data.get('password')
             
             print(f"👤 Email/Username: {email}")
             print(f"🔑 Password provided: {'Yes' if password else 'No'}")
             
             if not email or not password:
-                return jsonify({'error': 'Email and password required'}), 400
+                return jsonify({
+                    'success': False,
+                    'error': 'Email and password are required'
+                }), 400
             
             # Find user by email OR username
             user = User.query.filter(
@@ -35,67 +127,55 @@ def register_auth_routes(app):
             
             print(f"🔍 User found: {'Yes' if user else 'No'}")
             
-            if user:
-                print(f"✅ User: {user.username}, Email: {user.email}, Role: {user.role.value}")
-                
-                password_valid = check_password_hash(user.password_hash, password)
-                print(f"🔑 Password valid: {password_valid}")
-                
-                if password_valid:
-                    return jsonify({
-                        'message': 'Login successful',
-                        'user': {
-                            'id': user.id,
-                            'username': user.username,
-                            'email': user.email,
-                            'role': user.role.value
-                        }
-                    }), 200
-                else:
-                    # ✅ FIX: Update password if it doesn't match (for development)
-                    print(f"🔧 Password doesn't match. Updating password for user: {user.username}")
-                    user.password_hash = generate_password_hash(password)
-                    db.session.commit()
-                    print(f"✅ Password updated successfully")
-                    
-                    return jsonify({
-                        'message': 'Login successful (password updated)',
-                        'user': {
-                            'id': user.id,
-                            'username': user.username,
-                            'email': user.email,
-                            'role': user.role.value
-                        }
-                    }), 200
-            else:
-                # Create user if none exists
-                print(f"🔧 Creating new user with email: {email}")
-                new_user = User(
-                    username=email.split('@')[0],
-                    email=email,
-                    password_hash=generate_password_hash(password),
-                    role=UserRole.insurer
-                )
-                
-                db.session.add(new_user)
-                db.session.commit()
-                
-                print(f"✅ Created user: {new_user.username}")
-                
+            if not user:
                 return jsonify({
-                    'message': 'User created and logged in',
-                    'user': {
-                        'id': new_user.id,
-                        'username': new_user.username,
-                        'email': new_user.email,
-                        'role': new_user.role.value
-                    }
-                }), 200
+                    'success': False,
+                    'error': 'Invalid email or password'
+                }), 401
+            
+            print(f"✅ User: {user.username}, Email: {user.email}, Role: {user.role.value}")
+            
+            # Check password
+            password_valid = check_password_hash(user.password_hash, password)
+            print(f"🔑 Password valid: {password_valid}")
+            
+            if not password_valid:
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid email or password'
+                }), 401
+            
+            # ✅ SUCCESSFUL LOGIN - Use username as business_name
+            response_data = {
+                'success': True,
+                'message': 'Login successful',
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'business_name': user.username,  # ✅ Use username as business name
+                    'business_email': user.email,
+                    'email': user.email,
+                    'role': user.role.value
+                },
+                'token': f'mock_jwt_token_{user.id}_{datetime.utcnow().timestamp()}'  # Mock JWT token
+            }
+            
+            print(f"✅ Login successful: {response_data}")
+            return jsonify(response_data), 200
                 
         except Exception as e:
-            print(f"💥 Login error: {str(e)}")
-            return jsonify({'error': str(e)}), 500
+            print(f"❌ Login error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                'success': False,
+                'error': f'Login failed: {str(e)}'
+            }), 500
     
     @app.route('/api/test-auth', methods=['GET'])
     def test_auth():
-        return jsonify({'message': 'Authentication working!'}), 200
+        """Test endpoint to verify auth routes are working"""
+        return jsonify({
+            'message': 'Authentication routes working!',
+            'endpoints': ['/api/signup', '/api/login']
+        }), 200

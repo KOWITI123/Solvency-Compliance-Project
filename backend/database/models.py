@@ -53,13 +53,13 @@ class DataSubmission(db.Model):
     data_hash = Column(String(64), unique=True, nullable=False)
     capital = Column(Float, nullable=False)  # numeric(15,2) in db
     liabilities = Column(Float, nullable=False)  # numeric(15,2) in db
-    solvency_ratio = Column(Float, nullable=False)  # numeric(5,2) in db
+    solvency_ratio = Column(Float, nullable=True)  # numeric(5,2) in db
     submission_date = Column(Date, nullable=False)
     insurer_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     insurer_submitted_at = Column(DateTime, nullable=True)
     regulator_id = Column(Integer, ForeignKey('users.id'), nullable=True)
-    regulator_approved_at = Column(DateTime, nullable=True)
-    regulator_rejected_at = Column(DateTime, nullable=True)
+    regulator_approved_at = Column(DateTime, nullable=True)  # ✅ Keep this name
+    regulator_rejected_at = Column(DateTime, nullable=True)  # ✅ Keep this name
     regulator_comments = Column(Text, nullable=True)
     status = Column(Enum(SubmissionStatus), nullable=False)
     compliance_status = Column(Enum(ComplianceStatus), nullable=True)
@@ -95,13 +95,9 @@ class Notification(db.Model):
     __tablename__ = 'notifications'
     
     id = Column(Integer, primary_key=True)
-    sender_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    recipient_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    recipient_id = Column(Integer, nullable=False)  # ✅ INTEGER not String
+    sender_id = Column(Integer, nullable=False)     # ✅ INTEGER not String  
     message = Column(Text, nullable=False)
-    urgency = Column(Enum(NotificationUrgency), nullable=False)
-    sent_at = Column(DateTime, nullable=True)  # Note: nullable in your DB
-    status = Column(Enum(NotificationStatus), nullable=False)
-    
-    # Relationships
-    sender = relationship("User", foreign_keys=[sender_id])
-    recipient = relationship("User", foreign_keys=[recipient_id])
+    urgency = Column(String(20), nullable=False)
+    status = Column(String(20), default='Unread', nullable=False)
+    sent_at = Column(DateTime, default=datetime.utcnow, nullable=True)
