@@ -5,4 +5,9 @@ SQLAlchemy==2.0.35
 Werkzeug==3.0.4
 Flask-CORS==4.0.1
 python-dotenv==1.0.1
+<<<<<<< HEAD
 openai==0.28.0
+=======
+openai
+PyPDF2
+>>>>>>> 86c77f4 (added ai agent)

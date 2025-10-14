@@ -10,12 +10,15 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
+import { FormField, FormItem, FormLabel, FormControl, FormMessage } from '@/components/ui/form';
 import { useAuditStore, type AuditReview } from '../stores/auditStore';
 import { useAuthStore } from '../stores/authStore';
 import { CheckCircle, XCircle, AlertCircle, Eye, MessageSquare, Download, FileCheck, Users, MapPin, Building, Bell, Clock, Hash } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { FaCheck, FaTimes, FaFileAlt, FaUser } from 'react-icons/fa';
+import { z } from 'zod';
+import { useForm } from 'react-hook-form';
 
 const COLORS = { compliant: 'hsl(var(--chart-2))', nonCompliant: 'hsl(var(--chart-5))' };
 
@@ -54,6 +57,7 @@ interface PendingSubmission {
     email?: string;
   };
   status: string;
+<<<<<<< HEAD
   ai_extraction?: ComplianceMetrics;
   submission_date?: string;
   financial_statement_url?: string;
@@ -71,6 +75,17 @@ interface PendingSubmission {
   related_party_net_exposure?: number | string;
   claims_development_method?: string;
   auditors_unqualified_opinion?: boolean | null;
+=======
+  risk_assessment?: {
+    underwriting_risk?: number;
+    market_risk?: number;
+    credit_risk?: number;
+    operational_risk?: number;
+  };
+  orsa_status?: string;
+  last_stress_test?: string;
+  stress_test_complete?: boolean;
+>>>>>>> 86c77f4 (added ai agent)
 }
 
 interface RegulatorNotification {
@@ -106,10 +121,15 @@ export function AuditDashboardPage() {
   const [approvalComments, setApprovalComments] = useState('');
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
+<<<<<<< HEAD
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [aiInsurerId, setAiInsurerId] = useState<string>('');
   const [aiUploading, setAiUploading] = useState(false);
   const [aiSummaryResult, setAiSummaryResult] = useState<any | null>(null);
+=======
+  const [riskAssessments, setRiskAssessments] = useState<any[]>([]);
+  const [stressTests, setStressTests] = useState<any[]>([]);
+>>>>>>> 86c77f4 (added ai agent)
   
   // Existing filters
   const [insurerIdFilter, setInsurerIdFilter] = useState('all');
@@ -156,6 +176,30 @@ export function AuditDashboardPage() {
       setRegulatorNotifications([]);
     }
   }, []);
+
+  const fetchRiskAssessments = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/regulator/risk-assessments');
+      if (response.ok) {
+        const data = await response.json();
+        setRiskAssessments(data.assessments || []);
+      }
+    } catch (error) {
+      console.error('Error fetching risk assessments:', error);
+    }
+  };
+
+  const fetchStressTests = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/regulator/stress-tests');
+      if (response.ok) {
+        const data = await response.json();
+        setStressTests(data.tests || []);
+      }
+    } catch (error) {
+      console.error('Error fetching stress tests:', error);
+    }
+  };
 
   const approveSubmission = async () => {
     if (!selectedPendingSubmission) return;
@@ -241,6 +285,7 @@ export function AuditDashboardPage() {
     }
   };
 
+<<<<<<< HEAD
   const uploadAndSummarize = async () => {
     const fileEl = fileInputRef.current;
     if (!fileEl || !fileEl.files || fileEl.files.length === 0) {
@@ -272,6 +317,21 @@ export function AuditDashboardPage() {
       setAiSummaryResult({ error: 'Network error' });
     } finally {
       setAiUploading(false);
+=======
+  const approveRiskAssessment = async (assessmentId: number) => {
+    try {
+      const response = await fetch(`http://localhost:5000/api/regulator/approve-risk/${assessmentId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      if (response.ok) {
+        toast.success('Risk assessment approved');
+        fetchRiskAssessments();
+      }
+    } catch (error) {
+      toast.error('Failed to approve risk assessment');
+>>>>>>> 86c77f4 (added ai agent)
     }
   };
 
@@ -281,14 +341,20 @@ export function AuditDashboardPage() {
       fetchSubmissions();
     }
     
-    // Fetch new regulator data
+    // Existing regulator data
     fetchPendingSubmissions();
     fetchRegulatorNotifications();
     
-    // Refresh data every 30 seconds
+    // NEW: Add risk management data
+    fetchRiskAssessments();
+    fetchStressTests();
+    
+    // Refresh all data every 30 seconds
     const interval = setInterval(() => {
       fetchPendingSubmissions();
       fetchRegulatorNotifications();
+      fetchRiskAssessments();
+      fetchStressTests();
     }, 30000);
 
     return () => clearInterval(interval);
@@ -428,6 +494,108 @@ export function AuditDashboardPage() {
     }
   };
 
+  // Stress testing component
+  function StressTestCalculator() {
+    const [currentSolvency, setCurrentSolvency] = useState(0);
+    const [stressScenario, setStressScenario] = useState({
+      marketDecline: 0,    // Percentage
+      claimsIncrease: 0,   // Percentage
+      economicImpact: 0    // Percentage
+    });
+
+    const calculateStressedSolvency = () => {
+      // Get current capital and liabilities
+      const currentCapital = currentSolvency; // Use state value for current capital
+      const currentLiabilities = 0; // Set this to the actual liabilities value as needed
+      
+      // Apply stress factors
+      const stressedCapital = currentCapital * (1 - stressScenario.marketDecline / 100);
+      const stressedLiabilities = currentLiabilities * (1 + stressScenario.claimsIncrease / 100);
+      
+      // Calculate new solvency ratio
+      const stressedRatio = (stressedCapital / stressedLiabilities) * 100;
+      
+      return {
+        stressedRatio,
+        stillCompliant: stressedRatio >= 100,
+        capitalShortfall: stressedRatio < 100 ? (stressedLiabilities - stressedCapital) : 0
+      };
+    };
+
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Stress Test Scenario</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div>
+              <label>Market Decline (%)</label>
+              <input 
+                type="range" 
+                min="0" 
+                max="50" 
+                value={stressScenario.marketDecline}
+                onChange={(e) => setStressScenario({
+                  ...stressScenario, 
+                  marketDecline: parseInt(e.target.value)
+                })}
+              />
+              <span>{stressScenario.marketDecline}%</span>
+            </div>
+            
+            <div>
+              <label>Claims Increase (%)</label>
+              <input 
+                type="range" 
+                min="0" 
+                max="200" 
+                value={stressScenario.claimsIncrease}
+                onChange={(e) => setStressScenario({
+                  ...stressScenario, 
+                  claimsIncrease: parseInt(e.target.value)
+                })}
+              />
+              <span>{stressScenario.claimsIncrease}%</span>
+            </div>
+            
+            <StressTestResults result={calculateStressedSolvency()} />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Add missing StressTestResults component
+  function StressTestResults({ result }: { result: { stressedRatio: number; stillCompliant: boolean; capitalShortfall: number } }) {
+    return (
+      <div className="mt-4 p-4 border rounded-lg bg-gray-50">
+        <div className="flex flex-col gap-2">
+          <div>
+            <span className="font-medium">Stressed Solvency Ratio: </span>
+            <span className={result.stillCompliant ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
+              {isNaN(result.stressedRatio) ? 'N/A' : result.stressedRatio.toFixed(2)}%
+            </span>
+          </div>
+          <div>
+            <span className="font-medium">Compliance Status: </span>
+            <span className={result.stillCompliant ? 'text-green-600' : 'text-red-600'}>
+              {result.stillCompliant ? 'Compliant' : 'Non-Compliant'}
+            </span>
+          </div>
+          {!result.stillCompliant && (
+            <div>
+              <span className="font-medium">Capital Shortfall: </span>
+              <span className="text-red-600">
+                {isNaN(result.capitalShortfall) ? 'N/A' : result.capitalShortfall.toFixed(2)}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -503,7 +671,7 @@ export function AuditDashboardPage() {
       )}
 
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="overview">Overview & Analytics</TabsTrigger>
           <TabsTrigger value="approvals" className="relative">
             Regulatory Approvals
@@ -513,6 +681,7 @@ export function AuditDashboardPage() {
               </Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="risk-management">Risk Management</TabsTrigger>
           <TabsTrigger value="submissions">Detailed Submissions</TabsTrigger>
           <TabsTrigger value="reviews">Reviews Management</TabsTrigger>
           <TabsTrigger value="ai-summaries">AI Summaries</TabsTrigger>
@@ -840,6 +1009,7 @@ export function AuditDashboardPage() {
                       </div>
                     </div>
 
+<<<<<<< HEAD
                     <div className="mt-4 flex gap-2">
                       <Button onClick={uploadAndSummarize} disabled={aiUploading}>
                         {aiUploading ? 'Uploading & summarizing...' : 'Upload & Summarize'}
@@ -848,6 +1018,188 @@ export function AuditDashboardPage() {
                         Clear
                       </Button>
                     </div>
+=======
+        <TabsContent value="reviews">
+          <Card>
+            <CardHeader>
+              <CardTitle>Review Management</CardTitle>
+              <CardDescription>
+                Manage and track audit reviews
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {reviews && reviews.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Submission</TableHead>
+                      <TableHead>Review Date</TableHead>
+                      <TableHead>Reviewer</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Comments</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {reviews.map((review) => {
+                      const submission = submissions?.find(s => s.id === review.submissionId);
+                      const anonymizedId = submission ? `INS-${(submission.id.charCodeAt(submission.id.length - 1) % 5) + 101}` : 'Unknown';
+                      return (
+                        <TableRow key={review.id}>
+                          <TableCell className="font-medium">
+                            {anonymizedId}
+                          </TableCell>
+                          <TableCell>
+                            {format(new Date(review.createdAt), 'PPP')}
+                          </TableCell>
+                          <TableCell>
+                            {review.reviewerName || 'Unknown'}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              {getStatusIcon(review.status)}
+                              {getStatusBadge(review.status)}
+                            </div>
+                          </TableCell>
+                          <TableCell className="max-w-md">
+                            <div className="truncate" title={review.comments}>
+                              {review.comments || 'No comments'}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  <MessageSquare className="mx-auto h-12 w-12 mb-4" />
+                  <p>No reviews submitted yet</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="risk-management">
+          <div className="space-y-6">
+            {/* Risk Overview Cards */}
+            <div className="grid gap-4 md:grid-cols-3">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <AlertCircle className="h-5 w-5" />
+                    High Risk Insurers
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-red-600">
+                    {pendingSubmissions.filter(s => s.solvency_ratio < 100).length}
+                  </div>
+                  <p className="text-sm text-muted-foreground">Below 100% solvency</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <CheckCircle className="h-5 w-5" />
+                    Risk Assessments Pending
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-orange-600">
+                    {pendingSubmissions.filter(s => 
+                      !s.risk_assessment ||
+                      Object.values(s.risk_assessment).some(v => v === undefined || v === null || v === 0)
+                    ).length || 0}
+                  </div>
+                  <p className="text-sm text-muted-foreground">Awaiting ORSA review</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Eye className="h-5 w-5" />
+                    Stress Tests Due
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-blue-600">
+                    {pendingSubmissions.filter(s => !s.stress_test_complete).length || 0}
+                  </div>
+                  <p className="text-sm text-muted-foreground">Annual stress testing</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Risk Assessment Table */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Risk Assessment Overview</CardTitle>
+                <CardDescription>Monitor risk management compliance across all insurers</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Insurer</TableHead>
+                      <TableHead>Solvency Ratio</TableHead>
+                      <TableHead>Risk Level</TableHead>
+                      <TableHead>ORSA Status</TableHead>
+                      <TableHead>Last Stress Test</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pendingSubmissions.map((submission) => {
+                      const riskLevel = submission.solvency_ratio >= 150 ? 'LOW' : 
+                                      submission.solvency_ratio >= 100 ? 'MEDIUM' : 'HIGH';
+                      const riskColor = riskLevel === 'HIGH' ? 'text-red-600' : 
+                                       riskLevel === 'MEDIUM' ? 'text-yellow-600' : 'text-green-600';
+                      
+                      return (
+                        <TableRow key={submission.id}>
+                          <TableCell className="font-medium">
+                            {(submission.insurer && submission.insurer.username) || 'Unknown'}
+                          </TableCell>
+                          <TableCell>
+                            <span className={submission.solvency_ratio >= 100 ? 'text-green-600' : 'text-red-600'}>
+                              {submission.solvency_ratio}%
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={riskLevel === 'HIGH' ? 'destructive' : riskLevel === 'MEDIUM' ? 'secondary' : 'default'}>
+                              {riskLevel} RISK
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {submission.orsa_status || 'PENDING'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm text-muted-foreground">
+                              {submission.last_stress_test || 'Not conducted'}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Button variant="outline" size="sm">
+                              <Eye className="h-4 w-4 mr-2" />
+                              Review Risk
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
+>>>>>>> 86c77f4 (added ai agent)
 
                     {aiUploading && <p className="text-sm text-muted-foreground mt-2">Please wait — summarization may take several seconds.</p>}
 
@@ -885,8 +1237,72 @@ export function AuditDashboardPage() {
                   </CardContent>
                 </Card>
               </div>
+<<<<<<< HEAD
             </TabsContent>
           </Tabs>
         </div>
       ); // <-- This closes your AuditDashboardPage component
     }
+=======
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Comments</Label>
+                <Textarea
+                  placeholder="Enter your review comments..."
+                  value={reviewComment}
+                  onChange={(e) => setReviewComment(e.target.value)}
+                  className="min-h-[100px]"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Additional Comments (Optional)</Label>
+                <Textarea
+                  placeholder="Any additional notes or observations..."
+                  value={additionalComment}
+                  onChange={(e) => setAdditionalComment(e.target.value)}
+                  className="min-h-[80px]"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={handleCloseDialog}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleSubmitReview}
+                disabled={!reviewComment.trim()}
+              >
+                Submit Review
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
+// Update the existing dataInputSchema
+const dataInputSchema = z.object({
+  capital: z.string().min(1, 'Capital is required.'),
+  liabilities: z.string().min(1, 'Liabilities is required.'),
+  date: z.date(),
+  financialStatement: z.any().optional(),
+  // NEW: Add risk assessment fields
+  underwritingRisk: z.string().optional(),
+  marketRisk: z.string().optional(),
+  creditRisk: z.string().optional(),
+  operationalRisk: z.string().optional(),
+});
+
+<div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
+  <div className="flex items-start gap-3">
+    <AlertCircle className="h-5 w-5 text-purple-600 mt-1" />
+    <div>
+      <h4 className="font-medium text-purple-900">Risk Assessment (ORSA)</h4>
+      <p className="text-sm text-purple-700 mt-1">
+        Optional: Provide risk percentages for comprehensive ORSA reporting and enhanced regulatory compliance.
+      </p>
+    </div>
+  </div>
+</div>
+>>>>>>> 86c77f4 (added ai agent)

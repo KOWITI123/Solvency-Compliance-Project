@@ -239,17 +239,6 @@ export function LoginPage() {
             </form>
           </Form>
           
-          {/* Development Login Information */}
-          <div className="mt-4 p-3 bg-muted/50 rounded-lg">
-            <p className="text-sm text-muted-foreground text-center mb-2">
-              <strong>Development Access:</strong>
-            </p>
-            <div className="text-xs text-muted-foreground space-y-1">
-              <div>• <strong>Insurers:</strong> Sign up and login with database</div>
-              <div>• <strong>Regulator:</strong> regulator@ira.co.ke / regulator123</div>
-              <div>• <strong>Admin:</strong> admin@solvasure.co.ke / admin123</div>
-            </div>
-          </div>
           
           <div className="mt-6 text-center text-sm">
             <div className="space-y-2">

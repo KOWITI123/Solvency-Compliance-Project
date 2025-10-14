@@ -1,9 +1,18 @@
 from flask import request, jsonify, send_from_directory, url_for, current_app
 from datetime import datetime
 from database.db_connection import db
+<<<<<<< HEAD
 from database.models import DataSubmission, SubmissionStatus, Notification, User
 from sqlalchemy import cast, String
 import sqlalchemy as sa
+=======
+from database.models import (
+    DataSubmission, SubmissionStatus, Notification, 
+    MaterialRisk, StressTest, RiskAppetiteStatement, 
+    KeyFunctionHolder, BoardMeeting, InternalControl, ORSAReport,
+    RiskType, RiskLevel, StressTestStatus, GovernanceRole
+)
+>>>>>>> 86c77f4 (added ai agent)
 import json
 import os
 import time
@@ -370,6 +379,7 @@ def register_regulator_routes(app):
                 'notifications': []
             }), 200
 
+<<<<<<< HEAD
     @app.route('/api/regulator/upload-and-summarize', methods=['POST'])
     def regulator_upload_and_summarize():
         """
@@ -499,3 +509,283 @@ def register_regulator_routes(app):
             return jsonify({'success': False, 'error': str(e)}), 500
  
             
+=======
+    @app.route('/api/regulator/risk-assessments', methods=['GET'])
+    def regulator_get_risk_assessments():
+        """Get all risk assessments for regulator oversight"""
+        try:
+            print("📊 Fetching risk assessments for regulator")
+            
+            # Get all material risks across all insurers
+            risk_assessments = MaterialRisk.query.filter(
+                MaterialRisk.status == 'ACTIVE'
+            ).order_by(MaterialRisk.risk_score.desc()).all()
+            
+            assessments_data = []
+            for risk in risk_assessments:
+                assessments_data.append({
+                    'id': risk.id,
+                    'insurer_id': risk.insurer_id,
+                    'risk_type': risk.risk_type.value if hasattr(risk.risk_type, 'value') else str(risk.risk_type),
+                    'risk_title': risk.risk_title,
+                    'risk_description': risk.risk_description,
+                    'probability': risk.probability,
+                    'financial_impact': float(risk.financial_impact),
+                    'risk_score': float(risk.risk_score),
+                    'risk_level': risk.risk_level.value if hasattr(risk.risk_level, 'value') else str(risk.risk_level),
+                    'mitigation_measures': risk.mitigation_measures,
+                    'risk_owner': risk.risk_owner,
+                    'review_date': risk.review_date.isoformat() if risk.review_date else None,
+                    'last_reviewed': risk.last_reviewed.isoformat() if risk.last_reviewed else None,
+                    'created_at': risk.created_at.isoformat() if risk.created_at else None
+                })
+            
+            return jsonify({
+                'success': True,
+                'assessments': assessments_data,
+                'total_count': len(assessments_data)
+            }), 200
+            
+        except Exception as e:
+            print(f"❌ Error fetching risk assessments: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'assessments': []
+            }), 500
+
+    @app.route('/api/regulator/stress-tests', methods=['GET'])
+    def regulator_get_stress_tests():
+        """Get all stress tests for regulator oversight"""
+        try:
+            print("🧪 Fetching stress tests for regulator")
+            
+            # Get all completed stress tests
+            stress_tests = StressTest.query.filter(
+                StressTest.status == StressTestStatus.COMPLETED
+            ).order_by(StressTest.test_date.desc()).all()
+            
+            tests_data = []
+            for test in stress_tests:
+                tests_data.append({
+                    'id': test.id,
+                    'insurer_id': test.insurer_id,
+                    'test_name': test.test_name,
+                    'test_description': test.test_description,
+                    'base_solvency_ratio': float(test.base_solvency_ratio),
+                    'stressed_solvency_ratio': float(test.stressed_solvency_ratio) if test.stressed_solvency_ratio else None,
+                    'market_decline_percentage': float(test.market_decline_percentage),
+                    'claims_increase_percentage': float(test.claims_increase_percentage),
+                    'capital_shortfall': float(test.capital_shortfall),
+                    'still_compliant': test.still_compliant,
+                    'action_plan': test.action_plan,
+                    'test_date': test.test_date.isoformat() if test.test_date else None,
+                    'status': test.status.value if hasattr(test.status, 'value') else str(test.status)
+                })
+            
+            return jsonify({
+                'success': True,
+                'tests': tests_data,
+                'total_count': len(tests_data)
+            }), 200
+            
+        except Exception as e:
+            print(f"❌ Error fetching stress tests: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'tests': []
+            }), 500
+
+    @app.route('/api/regulator/approve-risk/<int:assessment_id>', methods=['POST'])
+    def regulator_approve_risk_assessment(assessment_id):
+        """Approve a risk assessment"""
+        try:
+            print(f"✅ Approving risk assessment: {assessment_id}")
+            
+            risk_assessment = MaterialRisk.query.get(assessment_id)
+            if not risk_assessment:
+                return jsonify({'success': False, 'error': 'Risk assessment not found'}), 404
+            
+            # Update the review date
+            risk_assessment.last_reviewed = datetime.utcnow()
+            
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': 'Risk assessment approved',
+                'assessment_id': assessment_id
+            }), 200
+            
+        except Exception as e:
+            db.session.rollback()
+            print(f"❌ Error approving risk assessment: {str(e)}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/regulator/orsa-reports', methods=['GET'])
+    def regulator_get_orsa_reports():
+        """Get all ORSA reports for regulator review"""
+        try:
+            print("📋 Fetching ORSA reports for regulator")
+            
+            orsa_reports = ORSAReport.query.filter(
+                ORSAReport.submitted_to_ira == True
+            ).order_by(ORSAReport.ira_submission_date.desc()).all()
+            
+            reports_data = []
+            for report in orsa_reports:
+                reports_data.append({
+                    'id': report.id,
+                    'insurer_id': report.insurer_id,
+                    'report_year': report.report_year,
+                    'total_risks_identified': report.total_risks_identified,
+                    'high_critical_risks': report.high_critical_risks,
+                    'stress_tests_performed': report.stress_tests_performed,
+                    'worst_case_solvency_ratio': float(report.worst_case_solvency_ratio),
+                    'capital_adequacy_assessment': report.capital_adequacy_assessment,
+                    'board_approved': report.board_approved,
+                    'board_approval_date': report.board_approval_date.isoformat() if report.board_approval_date else None,
+                    'ira_submission_date': report.ira_submission_date.isoformat() if report.ira_submission_date else None,
+                    'ira_reference_number': report.ira_reference_number,
+                    'ira_feedback': report.ira_feedback
+                })
+            
+            return jsonify({
+                'success': True,
+                'reports': reports_data,
+                'total_count': len(reports_data)
+            }), 200
+            
+        except Exception as e:
+            print(f"❌ Error fetching ORSA reports: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'reports': []
+            }), 500
+
+    @app.route('/api/regulator/governance-overview', methods=['GET'])
+    def regulator_get_governance_overview():
+        """Get governance overview across all insurers"""
+        try:
+            print("🏛️ Fetching governance overview for regulator")
+            
+            # Get key function holders
+            key_persons = KeyFunctionHolder.query.filter(
+                KeyFunctionHolder.is_active == True
+            ).all()
+            
+            # Get recent board meetings
+            board_meetings = BoardMeeting.query.filter(
+                BoardMeeting.meeting_date >= datetime.utcnow().replace(month=1, day=1)  # This year
+            ).order_by(BoardMeeting.meeting_date.desc()).all()
+            
+            governance_data = {
+                'key_function_holders': [],
+                'board_meetings': [],
+                'governance_summary': {
+                    'total_insurers_with_complete_governance': 0,
+                    'fit_and_proper_compliance_rate': 0,
+                    'board_meeting_frequency_compliance': 0
+                }
+            }
+            
+            # Process key function holders
+            for person in key_persons:
+                governance_data['key_function_holders'].append({
+                    'id': person.id,
+                    'insurer_id': person.insurer_id,
+                    'full_name': person.full_name,
+                    'position': person.position.value if hasattr(person.position, 'value') else str(person.position),
+                    'fit_and_proper_status': person.fit_and_proper_status,
+                    'fit_and_proper_date': person.fit_and_proper_date.isoformat() if person.fit_and_proper_date else None,
+                    'appointment_date': person.appointment_date.isoformat() if person.appointment_date else None,
+                    'next_review_date': person.next_review_date.isoformat() if person.next_review_date else None,
+                    'ira_approval_ref': person.ira_approval_ref
+                })
+            
+            # Process board meetings
+            for meeting in board_meetings:
+                governance_data['board_meetings'].append({
+                    'id': meeting.id,
+                    'insurer_id': meeting.insurer_id,
+                    'meeting_date': meeting.meeting_date.isoformat(),
+                    'meeting_type': meeting.meeting_type,
+                    'attendees': json.loads(meeting.attendees) if meeting.attendees else [],
+                    'risk_topics_discussed': json.loads(meeting.risk_topics_discussed) if meeting.risk_topics_discussed else [],
+                    'decisions_approved': json.loads(meeting.decisions_approved) if meeting.decisions_approved else [],
+                    'next_meeting_date': meeting.next_meeting_date.isoformat() if meeting.next_meeting_date else None
+                })
+            
+            return jsonify({
+                'success': True,
+                'governance': governance_data
+            }), 200
+            
+        except Exception as e:
+            print(f"❌ Error fetching governance overview: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'governance': {}
+            }), 500
+
+    @app.route('/api/regulator/risk-dashboard-stats', methods=['GET'])
+    def regulator_get_risk_dashboard_stats():
+        """Get risk dashboard statistics for regulator overview"""
+        try:
+            print("📊 Fetching risk dashboard stats")
+            
+            # Count high-risk insurers (solvency ratio < 100%)
+            high_risk_count = DataSubmission.query.filter(
+                DataSubmission.status == SubmissionStatus.REGULATOR_APPROVED,
+                DataSubmission.solvency_ratio < 100
+            ).count()
+            
+            # Count pending risk assessments
+            pending_risk_assessments = MaterialRisk.query.filter(
+                MaterialRisk.status == 'ACTIVE',
+                MaterialRisk.last_reviewed.is_(None)
+            ).count()
+            
+            # Count stress tests due (older than 12 months)
+            from dateutil.relativedelta import relativedelta
+            twelve_months_ago = datetime.utcnow() - relativedelta(months=12)
+            stress_tests_due = db.session.query(DataSubmission.insurer_id).distinct().filter(
+                ~DataSubmission.insurer_id.in_(
+                    db.session.query(StressTest.insurer_id).filter(
+                        StressTest.test_date >= twelve_months_ago
+                    )
+                )
+            ).count()
+            
+            # Count ORSA reports pending
+            orsa_pending = ORSAReport.query.filter(
+                ORSAReport.board_approved == False
+            ).count()
+            
+            stats = {
+                'high_risk_insurers': high_risk_count,
+                'pending_risk_assessments': pending_risk_assessments,
+                'stress_tests_due': stress_tests_due,
+                'orsa_reports_pending': orsa_pending,
+                'total_active_risks': MaterialRisk.query.filter(MaterialRisk.status == 'ACTIVE').count(),
+                'total_completed_stress_tests': StressTest.query.filter(StressTest.status == StressTestStatus.COMPLETED).count()
+            }
+            
+            return jsonify({
+                'success': True,
+                'stats': stats
+            }), 200
+            
+        except Exception as e:
+            print(f"❌ Error fetching risk dashboard stats: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'stats': {}
+            }), 500
+
+    print("✅ Regulator routes registered successfully")
+>>>>>>> 86c77f4 (added ai agent)
