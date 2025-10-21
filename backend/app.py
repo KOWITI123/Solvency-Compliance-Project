@@ -3,8 +3,9 @@ from flask_cors import CORS
 from database.db_connection import db, connect_database
 from routes.submit_data import register_submission_routes
 from routes.regulator_routes import register_regulator_routes
-from routes.authentication import register_auth_routes  # ✅ Add this import
-from datetime import datetime  # ✅ Add this import
+from routes.authentication import register_auth_routes
+from routes.compliance_routes import register_compliance_routes
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -24,7 +25,8 @@ from database.models import *
 # Register routes
 register_submission_routes(app)
 register_regulator_routes(app)
-register_auth_routes(app)  # ✅ Add this line to register auth routes
+register_auth_routes(app)
+register_compliance_routes(app)
 
 @app.route('/health', methods=['GET'])
 def health_check():
