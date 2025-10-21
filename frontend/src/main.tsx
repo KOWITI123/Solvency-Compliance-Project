@@ -21,6 +21,10 @@ import { BlockchainLogPage } from '@/pages/BlockchainLogPage';
 import { AuditDashboardPage } from '@/pages/AuditDashboardPage';
 import { AdminDashboardPage } from '@/pages/AdminDashboardPage';
 import { UssdSimulationPage } from '@/pages/UssdSimulationPage';
+import { CapitalSolvencyPage } from '@/pages/CapitalSolvencyPage';
+import { InsurancePerformancePage } from '@/pages/InsurancePerformancePage';
+import { RiskManagementPage } from '@/pages/RiskManagementPage';
+import { CorporateGovernancePage } from '@/pages/CorporateGovernancePage';
 const router = createBrowserRouter([
   {
     path: "/",
@@ -54,6 +58,10 @@ const router = createBrowserRouter([
       { path: "audit", element: <AuditDashboardPage /> },
       { path: "admin", element: <AdminDashboardPage /> },
       { path: "ussd-simulation", element: <UssdSimulationPage /> },
+      { path: "capital-solvency", element: <CapitalSolvencyPage /> },
+      { path: "insurance-performance", element: <InsurancePerformancePage /> },
+      { path: "risk-management", element: <RiskManagementPage /> },
+      { path: "corporate-governance", element: <CorporateGovernancePage /> },
     ],
   },
 ]);
