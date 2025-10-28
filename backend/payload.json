@@ -1,0 +1,6 @@
+{
+  "prompt": {
+	"text": "Hello from test - reply briefly."
+  },
+  "maxOutputTokens": 50
+}

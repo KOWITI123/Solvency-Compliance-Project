@@ -14,7 +14,7 @@ import { SplashPage } from '@/pages/SplashPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { SignUpPage } from '@/pages/SignUpPage';
 import { HomePage } from '@/pages/HomePage';
-import { DataInputPage } from '@/pages/DataInputPage';
+import DataInputPage from './pages/DataInputPage';
 import { ComplianceStatusPage } from '@/pages/ComplianceStatusPage';
 import { InsurerDashboardPage } from '@/pages/InsurerDashboardPage';
 import { BlockchainLogPage } from '@/pages/BlockchainLogPage';

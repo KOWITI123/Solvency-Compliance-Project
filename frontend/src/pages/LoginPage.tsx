@@ -120,6 +120,8 @@ export function LoginPage() {
             // When login is successful, store complete user data
             localStorage.setItem('currentUser', JSON.stringify(data.user));
             localStorage.setItem('userToken', data.token);
+            localStorage.setItem('user', JSON.stringify(data.user)); // Store the user object
+            localStorage.setItem('userToken', data.token);           // Store the token if needed
             
             console.log('✅ Stored user data:', data.user);
             

@@ -5,3 +5,4 @@ SQLAlchemy==2.0.35
 Werkzeug==3.0.4
 Flask-CORS==4.0.1
 python-dotenv==1.0.1
+openai==0.28.0

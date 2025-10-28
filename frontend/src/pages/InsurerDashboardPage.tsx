@@ -18,13 +18,17 @@ import {
 } from 'react-icons/fa';
 import { format } from 'date-fns';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
+// ✅ ADD: Missing import
+import { RefreshCw } from 'lucide-react';
 
 const COLORS = {
   compliant: 'hsl(var(--chart-2))',
   nonCompliant: 'hsl(var(--chart-5))',
   capital: 'hsl(var(--chart-1))',
   liabilities: 'hsl(var(--chart-4))',
+  pending: 'hsl(var(--chart-3))',
 };
 
 export function InsurerDashboardPage() {
@@ -38,9 +42,9 @@ export function InsurerDashboardPage() {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [submissionHistory, setSubmissionHistory] = useState<any[]>([]);
 
+  // ✅ REVERT: Use the original working endpoint
   const fetchSubmissionHistory = useCallback(async () => {
     try {
-      // ✅ FIX: Get current user ID properly
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
       const userId = currentUser.id;
       
@@ -52,13 +56,31 @@ export function InsurerDashboardPage() {
         return;
       }
       
-      // ✅ FIX: Use user-specific endpoint
       const response = await fetch(`http://localhost:5000/api/submissions/user/${userId}`);
       
       if (response.ok) {
         const data = await response.json();
         console.log('📊 Fetched user submission history:', data);
-        setSubmissionHistory(data.submissions || []);
+        
+        // ✅ HANDLE: The actual API response format
+        if (data.success && data.submissions) {
+          const submissions = data.submissions.map((submission: any) => ({
+            ...submission,
+            // Ensure compatibility with existing code
+            submission_date: submission.submission_date || submission.created_at,
+            status: submission.status // Already in correct format
+          }));
+          
+          setSubmissionHistory(submissions);
+          
+          // Log approved submissions specifically
+          const approvedSubmissions = submissions.filter((s: any) => s.status === 'REGULATOR_APPROVED');
+          console.log(`✅ Found ${approvedSubmissions.length} approved submissions`);
+          
+        } else {
+          console.log('No submissions found in response');
+          setSubmissionHistory([]);
+        }
       } else {
         console.log('No submission history found or endpoint not available');
         setSubmissionHistory([]);
@@ -71,18 +93,17 @@ export function InsurerDashboardPage() {
 
   useEffect(() => {
     fetchSubmissionHistory();
+    // Auto-refresh every 30 seconds to check for new approvals
+    const interval = setInterval(fetchSubmissionHistory, 30000);
+    return () => clearInterval(interval);
   }, [fetchSubmissionHistory]);
 
-  // Replace the filteredSubmissions, chartData, and related calculations with user-specific data:
-
-  // ✅ FIX: Use submissionHistory (user-specific) instead of allSubmissions (all users)
   const filteredSubmissions = submissionHistory
     .slice()
     .sort((a, b) => new Date(a.submission_date || a.created_at).getTime() - new Date(b.submission_date || b.created_at).getTime())
     .slice(-parseInt(timeRange));
 
-  // ✅ FIX: Generate chartData from user-specific submissions
-  const chartData = filteredSubmissions.map(s => ({
+  const chartData = filteredSubmissions.map((s: any) => ({
     date: format(new Date(s.submission_date || s.created_at), 'yyyy-MM-dd'),
     solvencyRatio: s.solvency_ratio || 0,
     capital: s.capital || 0,
@@ -90,27 +111,29 @@ export function InsurerDashboardPage() {
     status: s.status === 'REGULATOR_APPROVED' ? 'Compliant' : 'Non-Compliant',
   }));
 
-  // ✅ FIX: Calculate compliance from user-specific data
-  const complianceDistribution = filteredSubmissions.reduce((acc, s) => {
+  const complianceDistribution = filteredSubmissions.reduce((acc, s: any) => {
     if (s.status === 'REGULATOR_APPROVED') acc[0].value += 1;
-    else acc[1].value += 1;
+    else if (s.status === 'REJECTED') acc[1].value += 1;
+    else acc[2].value += 1; // Pending
     return acc;
   }, [
-    { name: 'Compliant', value: 0 },
-    { name: 'Non-Compliant', value: 0 },
+    { name: 'Approved', value: 0, color: COLORS.compliant },
+    { name: 'Rejected', value: 0, color: COLORS.nonCompliant },
+    { name: 'Pending', value: 0, color: COLORS.pending },
   ]);
 
-  // ✅ FIX: Calculate average from user-specific data
   const averageSolvencyRatio = filteredSubmissions.length > 0
-    ? filteredSubmissions.reduce((sum, s) => sum + (s.solvency_ratio || 0), 0) / filteredSubmissions.length
+    ? filteredSubmissions.reduce((sum, s: any) => sum + (s.solvency_ratio || 0), 0) / filteredSubmissions.length
     : 0;
 
-  // ✅ FIX: Get latest status from user-specific data
+  // ✅ FIXED: Get latest approved status with the correct API format
   const userLatestStatus = submissionHistory.length > 0 
     ? submissionHistory
-        .filter(s => s.status === 'REGULATOR_APPROVED')
-        .sort((a, b) => new Date(b.regulator_approved_at || b.created_at).getTime() - new Date(a.regulator_approved_at || a.created_at).getTime())[0]
+        .filter((s: any) => s.status === 'REGULATOR_APPROVED' && s.regulator_approved_at)
+        .sort((a: any, b: any) => new Date(b.regulator_approved_at).getTime() - new Date(a.regulator_approved_at).getTime())[0]
     : null;
+
+  console.log('📊 Latest approved status:', userLatestStatus);
 
   const handleExport = () => {
     if (chartData.length === 0) {
@@ -120,7 +143,7 @@ export function InsurerDashboardPage() {
     const headers = "Date,Capital (KES),Liabilities (KES),Solvency Ratio,Status";
     const csvContent = [
       headers,
-      ...chartData.map(d => `${d.date},${d.capital},${d.liabilities},${d.solvencyRatio.toFixed(4)},${d.status}`)
+      ...chartData.map((d: any) => `${d.date},${d.capital},${d.liabilities},${d.solvencyRatio.toFixed(4)},${d.status}`)
     ].join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -152,7 +175,6 @@ export function InsurerDashboardPage() {
     setIsSubmitting(true);
 
     try {
-      // ✅ FIX: Get current user ID properly
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
       const userId = currentUser.id;
       
@@ -161,7 +183,7 @@ export function InsurerDashboardPage() {
       const payload = {
         capital: parseFloat(capital),
         liabilities: parseFloat(liabilities),
-        insurer_id: userId, // ✅ FIX: Use actual current user ID
+        insurer_id: userId,
         comments: comments,
       };
       
@@ -217,7 +239,6 @@ export function InsurerDashboardPage() {
   const testBlockchainAPI = async () => {
     console.log('🧪 Testing API call directly...');
     try {
-      // ✅ FIX: Get current user ID properly
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
       const userId = currentUser.id;
       
@@ -227,7 +248,7 @@ export function InsurerDashboardPage() {
         body: JSON.stringify({
           capital: 1000000,
           liabilities: 800000,
-          insurer_id: userId, // ✅ FIX: Use actual current user ID
+          insurer_id: userId,
           comments: 'Test submission'
         })
       });
@@ -238,7 +259,7 @@ export function InsurerDashboardPage() {
         toast.success('✅ API Test Successful!', {
           description: `Hash: ${data.submission_hash?.substring(0, 8)}...`
         });
-        await fetchSubmissionHistory(); // Refresh after test
+        await fetchSubmissionHistory();
       } else {
         toast.error('❌ API Test Failed', {
           description: data.error || 'Unknown error'
@@ -257,11 +278,69 @@ export function InsurerDashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold tracking-tight">Insurer Dashboard</h1>
-        <div className="text-sm text-muted-foreground flex items-center gap-2">
-          <FaUser className="h-4 w-4" />
-          Welcome, {user?.username || JSON.parse(localStorage.getItem('currentUser') || '{}')?.username || 'User'}
+        <div className="flex items-center gap-4">
+          <Button variant="outline" size="sm" onClick={fetchSubmissionHistory}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+          <div className="text-sm text-muted-foreground flex items-center gap-2">
+            <FaUser className="h-4 w-4" />
+            Welcome, {user?.username || JSON.parse(localStorage.getItem('currentUser') || '{}')?.username || 'User'}
+          </div>
         </div>
       </div>
+
+      {/* ✅ ADD: Show approved submissions prominently */}
+      {userLatestStatus && (
+        <Card className="border-green-200 bg-gradient-to-r from-green-50 to-emerald-50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-green-800">
+              <FaCheck className="h-5 w-5" />
+              Latest Regulatory Approval
+              <Badge variant="secondary" className="bg-green-100 text-green-800">
+                Approved
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-green-800">
+                  Transaction #{userLatestStatus.id}
+                </div>
+                <div className="text-sm text-green-700">
+                  Approved: {format(new Date(userLatestStatus.regulator_approved_at), 'PPP pp')}
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <span className="text-gray-500">Capital:</span>
+                    <div className="font-medium text-green-700">KES {userLatestStatus.capital?.toLocaleString()}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Liabilities:</span>
+                    <div className="font-medium text-red-600">KES {userLatestStatus.liabilities?.toLocaleString()}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Solvency:</span>
+                    <div className="font-medium text-blue-700">{userLatestStatus.solvency_ratio}%</div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                {userLatestStatus.regulator_comments && (
+                  <div>
+                    <div className="text-xs font-medium text-gray-700 mb-1">Regulator Comments:</div>
+                    <div className="text-sm bg-white p-2 rounded border text-gray-700">
+                      {userLatestStatus.regulator_comments}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -284,46 +363,85 @@ export function InsurerDashboardPage() {
           description="Current solvency status"
         />
         <StatCard
-          title="Compliance Status"
-          value={userLatestStatus?.status === 'REGULATOR_APPROVED' ? 'Compliant' : 'Unknown'}
+          title="Total Submissions"
+          value={submissionHistory.length.toString()}
           icon={<FaShieldAlt />}
-          description="Latest compliance check"
+          description="All submissions"
         />
       </div>
 
-      {/* Submission History */}
+      {/* ✅ ENHANCED: Show submission history with approval status */}
       {submissionHistory.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FaFileAlt className="h-5 w-5" />
-              Recent Blockchain Submissions
-            </CardTitle>
+            <CardTitle>Recent Submissions</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2">
-              {submissionHistory.slice(0, 5).map((submission, index) => (
-                <div key={submission.id || index} className="flex justify-between items-center p-3 border rounded-lg hover:bg-gray-50">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <FaCheck className="h-4 w-4 text-blue-500" />
-                      <span className="font-medium">Hash: {submission.data_hash?.substring(0, 8)}...</span>
-                      <span className="text-sm text-muted-foreground">
-                        Ratio: {submission.solvency_ratio}%
-                      </span>
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-1 ml-6">
-                      Capital: KES {submission.capital?.toLocaleString()} | 
-                      Liabilities: KES {submission.liabilities?.toLocaleString()}
+            <div className="space-y-3">
+              {submissionHistory.slice(0, 5).map((submission: any, index: number) => (
+                <div key={submission.id || index} className="p-4 border rounded-lg hover:bg-gray-50 transition-colors">
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="font-medium">Transaction #{submission.id}</span>
+                        <Badge className={
+                          submission.status === 'REGULATOR_APPROVED' ? 'bg-green-100 text-green-800' :
+                          submission.status === 'REJECTED' ? 'bg-red-100 text-red-800' :
+                          'bg-yellow-100 text-yellow-800'
+                        }>
+                          {submission.status === 'REGULATOR_APPROVED' ? 'Approved' :
+                           submission.status === 'REJECTED' ? 'Rejected' : 'Pending'}
+                        </Badge>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                        <div>
+                          <span className="text-gray-600">Capital:</span>
+                          <div className="font-medium">KES {submission.capital?.toLocaleString()}</div>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Liabilities:</span>
+                          <div className="font-medium">KES {submission.liabilities?.toLocaleString()}</div>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Solvency Ratio:</span>
+                          <div className="font-medium">{submission.solvency_ratio || 'Calculating...'}%</div>
+                        </div>
+                      </div>
+                      
+                      <div className="text-xs text-gray-500 mt-2">
+                        Submitted: {format(new Date(submission.submission_date || submission.created_at), 'PPp')}
+                      </div>
+                      
+                      {/* ✅ SHOW APPROVAL DETAILS */}
+                      {submission.status === 'REGULATOR_APPROVED' && submission.regulator_approved_at && (
+                        <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
+                          <div className="text-xs font-medium text-green-800">
+                            ✅ Approved: {format(new Date(submission.regulator_approved_at), 'PPP pp')}
+                          </div>
+                          {submission.regulator_comments && (
+                            <div className="text-xs text-green-700 mt-1">
+                              "{submission.regulator_comments}"
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* ✅ SHOW REJECTION DETAILS */}
+                      {submission.status === 'REJECTED' && submission.regulator_rejected_at && (
+                        <div className="mt-2 p-2 bg-red-50 rounded border border-red-200">
+                          <div className="text-xs font-medium text-red-800">
+                            ❌ Rejected: {format(new Date(submission.regulator_rejected_at), 'PPP pp')}
+                          </div>
+                          {submission.regulator_comments && (
+                            <div className="text-xs text-red-700 mt-1">
+                              "{submission.regulator_comments}"
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${
-                    submission.status === 'REGULATOR_APPROVED' ? 'bg-green-100 text-green-800' :
-                    submission.status === 'INSURER_SUBMITTED' ? 'bg-yellow-100 text-yellow-800' :
-                    'bg-gray-100 text-gray-800'
-                  }`}>
-                    {submission.status}
-                  </span>
                 </div>
               ))}
             </div>
@@ -336,10 +454,7 @@ export function InsurerDashboardPage() {
         {/* Solvency Ratio Trend */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FaChartLine className="h-5 w-5" />
-              Solvency Ratio Trend
-            </CardTitle>
+            <CardTitle>Solvency Ratio Trend</CardTitle>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
@@ -364,10 +479,7 @@ export function InsurerDashboardPage() {
         {/* Capital vs Liabilities */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FaChartBar className="h-5 w-5" />
-              Capital vs Liabilities
-            </CardTitle>
+            <CardTitle>Capital vs Liabilities</CardTitle>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
@@ -389,10 +501,7 @@ export function InsurerDashboardPage() {
       {complianceDistribution.some(item => item.value > 0) && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FaShieldAlt className="h-5 w-5" />
-              Compliance Status Distribution
-            </CardTitle>
+            <CardTitle>Submission Status Distribution</CardTitle>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
@@ -410,7 +519,7 @@ export function InsurerDashboardPage() {
                   {complianceDistribution.map((entry, index) => (
                     <Cell 
                       key={`cell-${index}`} 
-                      fill={entry.name === 'Compliant' ? COLORS.compliant : COLORS.nonCompliant} 
+                      fill={entry.color} 
                     />
                   ))}
                 </Pie>
@@ -421,12 +530,9 @@ export function InsurerDashboardPage() {
         </Card>
       )}
 
-      {/* Time Range Selector */}
+      {/* Time Range Selector and Export */}
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
-          <FaChartBar className="h-5 w-5" />
-          Financial Overview
-        </h2>
+        <h2 className="text-xl font-semibold">Financial Overview</h2>
         <div className="flex items-center gap-4">
           <Select value={timeRange} onValueChange={setTimeRange}>
             <SelectTrigger className="w-[180px]">
@@ -448,33 +554,25 @@ export function InsurerDashboardPage() {
       {/* Summary Stats */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FaChartBar className="h-5 w-5" />
-            Summary Statistics
-          </CardTitle>
+          <CardTitle>Summary Statistics</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
             <div className="text-center">
-              <div className="text-2xl font-bold flex items-center justify-center gap-2">
-                <FaFileAlt className="h-6 w-6 text-blue-500" />
-                {filteredSubmissions.length}
-              </div>
+              <div className="text-2xl font-bold">{filteredSubmissions.length}</div>
               <div className="text-sm text-muted-foreground">Total Submissions</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold flex items-center justify-center gap-2">
-                <FaChartLine className="h-6 w-6 text-green-500" />
-                {averageSolvencyRatio.toFixed(2)}%
-              </div>
+              <div className="text-2xl font-bold">{averageSolvencyRatio.toFixed(2)}%</div>
               <div className="text-sm text-muted-foreground">Average Solvency Ratio</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold flex items-center justify-center gap-2">
-                <FaShieldAlt className="h-6 w-6 text-emerald-500" />
-                {complianceDistribution[0].value}
-              </div>
-              <div className="text-sm text-muted-foreground">Compliant Submissions</div>
+              <div className="text-2xl font-bold">{complianceDistribution[0].value}</div>
+              <div className="text-sm text-muted-foreground">Approved Submissions</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold">{complianceDistribution[1].value}</div>
+              <div className="text-sm text-muted-foreground">Rejected Submissions</div>
             </div>
           </div>
         </CardContent>

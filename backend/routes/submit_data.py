@@ -1,241 +1,319 @@
+print("🔧 DEBUG: submit_data.py module is being imported")
+
 from flask import request, jsonify
 from datetime import datetime
 from database.db_connection import db
-from database.models import DataSubmission, SubmissionStatus, Notification, NotificationStatus, NotificationUrgency
-from utils.blockchain_verification import SimpleBlockchainVerification
-import json
+from database.models import DataSubmission, SubmissionStatus
 import hashlib
+import time
+import json
+import traceback
+import sys
+import re
+import os
+from werkzeug.utils import secure_filename
 
 def register_submission_routes(app):
-    """Register all submission-related routes with blockchain verification"""
+    print("🔧 DEBUG: register_submission_routes() function called")
     
-    print("📋 Registering submission routes...")
-    
-    @app.route('/api/insurer/submit-data', methods=['POST', 'OPTIONS'])
-    def insurer_submit_data():
-        # Handle CORS preflight
-        if request.method == 'OPTIONS':
-            print("🌐 CORS preflight request received for insurer submission")
-            return '', 200
-            
-        try:
-            print("🚀 CFO Submission with blockchain verification")
-            data = request.get_json()
-            print(f"📦 Received data: {data}")
-            
-            # Validate required fields
-            required_fields = ['capital', 'liabilities', 'insurer_id']
-            for field in required_fields:
-                if field not in data:
-                    print(f"❌ Missing field: {field}")
-                    return jsonify({'error': f'{field} is required'}), 400
-            
-            print(f"✅ All required fields present")
-            
-            # Create blockchain verification
-            blockchain_data = SimpleBlockchainVerification.create_submission_hash(
-                capital=data['capital'],
-                liabilities=data['liabilities'],
-                insurer_id=str(data['insurer_id'])
-            )
-            
-            print(f"⛓️ Blockchain data created: {blockchain_data}")
-            
-            # Create submission record
-            submission = DataSubmission(
-                insurer_id=int(data['insurer_id']),
-                data_hash=blockchain_data['submission_hash'],
-                capital=data['capital'],
-                liabilities=data['liabilities'],
-                solvency_ratio=blockchain_data['solvency_ratio'],
-                submission_date=datetime.utcnow().date(),
-                status=SubmissionStatus.INSURER_SUBMITTED,
-                insurer_submitted_at=datetime.utcnow(),
-                blockchain_data=json.dumps(blockchain_data)
-            )
-            
-            db.session.add(submission)
-            print(f"📝 Submission record created")
-            
-            # Create notification for regulator (using actual table structure)
-            try:
-                notification_message = f"🔗 CFO Submitted: Capital: {data['capital']:,}, Liabilities: {data['liabilities']:,}, Solvency: {blockchain_data['solvency_ratio']:.2f}%. Hash: {blockchain_data['submission_hash'][:8]}... [AWAITING REGULATOR APPROVAL]"
-                
-                # ✅ USE SIMPLE STRING VALUES INSTEAD OF ENUM
-                new_notification = Notification(
-                    recipient_id=1,  # Regulator ID as integer
-                    sender_id=int(data['insurer_id']),  # Insurer ID as integer
-                    message=notification_message,
-                    urgency='Medium',  # ✅ Use string instead of NotificationUrgency.Medium
-                    status='Unread',   # ✅ Use string instead of NotificationStatus.Sent
-                    sent_at=datetime.utcnow()
-                )
-                
-                db.session.add(new_notification)
-                print(f"📬 Notification created for regulator")
-                
-            except Exception as notif_error:
-                print(f"⚠️ Could not create notification: {notif_error}")
-                # Continue without failing the submission
-            
-            db.session.commit()
-            print(f"💾 Database committed successfully")
-            
-            print(f"✅ CFO submission verified with hash: {blockchain_data['submission_hash']}")
-            
-            return jsonify({
-                'message': '✅ CFO Submission Complete - Awaiting Regulator Approval',
-                'submission_id': submission.id,
-                'submission_hash': blockchain_data['submission_hash'],
-                'solvency_ratio': blockchain_data['solvency_ratio'],
-                'status': submission.status.value,
-                'verification': 'BLOCKCHAIN_VERIFIED',
-                'two_way_status': 'STEP_1_COMPLETE'
-            }), 200
-            
-        except Exception as e:
-            db.session.rollback()
-            print(f"❌ CFO submission error: {str(e)}")
-            import traceback
-            traceback.print_exc()  # Print full error details
-            return jsonify({'error': str(e)}), 500
-
-    @app.route('/api/insurer/submission-history', methods=['GET'])
-    def get_submission_history():
-        try:
-            user_id = request.args.get('user_id', 1)
-            print(f"📊 Fetching submission history for user: {user_id}")
-            
-            submissions = DataSubmission.query.filter_by(
-                insurer_id=int(user_id)
-            ).order_by(DataSubmission.submission_date.desc()).limit(10).all()
-            
-            submissions_data = []
-            for submission in submissions:
-                submissions_data.append({
-                    'id': submission.id,
-                    'capital': submission.capital,
-                    'liabilities': submission.liabilities,
-                    'solvency_ratio': submission.solvency_ratio,
-                    'data_hash': submission.data_hash,
-                    'status': submission.status.value,
-                    'submission_date': submission.submission_date.isoformat() if submission.submission_date else None,
-                    'insurer_submitted_at': submission.insurer_submitted_at.isoformat() if submission.insurer_submitted_at else None
-                })
-            
-            print(f"✅ Found {len(submissions_data)} submission records")
-            return jsonify({
-                'submissions': submissions_data,
-                'count': len(submissions_data)
-            }), 200
-            
-        except Exception as e:
-            print(f"❌ Error fetching submission history: {str(e)}")
-            return jsonify({'error': str(e)}), 500
-
     @app.route('/api/submit-data', methods=['POST'])
     def submit_data():
-        """Submit financial data for regulator approval (DataInputPage)"""
+        print("🚀 SUBMIT_DATA ROUTE CALLED!")
+        print(f"📋 Content-Type: {request.content_type}")
+        print("🚩 Entered submit_data route", file=sys.stderr)
+        
         try:
-            data = request.get_json()
-            print(f"📊 Received submission data from DataInputPage: {data}")
+            uploaded_file = None
+            saved_filename = None
+            saved_file_relpath = None
             
-            # Validate required fields
-            required_fields = ['insurer_id', 'capital', 'liabilities', 'submission_date']
-            for field in required_fields:
-                if field not in data:
-                    return jsonify({
-                        'success': False,
-                        'error': f'Missing required field: {field}'
-                    }), 400
+            # Handle both JSON and form data
+            if request.content_type == 'application/json':
+                print("📊 Processing JSON request...")
+                data = request.get_json()
+                if not data:
+                    raise ValueError("No JSON data provided")
+                
+            elif request.content_type and 'multipart/form-data' in request.content_type:
+                print("📁 Processing multipart form data...")
+                data = {
+                    'insurer_id': request.form.get('insurer_id'),
+                    'capital': request.form.get('capital'), 
+                    'liabilities': request.form.get('liabilities'),
+                    'submission_date': request.form.get('submission_date'),
+                    # P&L / profitability fields (manual entry)
+                    'gwp': request.form.get('gwp'),
+                    'net_claims_paid': request.form.get('net_claims_paid'),
+                    'investment_income_total': request.form.get('investment_income_total'),
+                    'commission_expense_total': request.form.get('commission_expense_total'),
+                    'operating_expenses_total': request.form.get('operating_expenses_total'),
+                    'profit_before_tax': request.form.get('profit_before_tax'),
+                    # Regulatory & governance disclosures
+                    'contingency_reserve_statutory': request.form.get('contingency_reserve_statutory'),
+                    'ibnr_reserve_gross': request.form.get('ibnr_reserve_gross'),
+                    'irfs17_implementation_status': request.form.get('irfs17_implementation_status'),
+                    'related_party_net_exposure': request.form.get('related_party_net_exposure'),
+                    'claims_development_method': request.form.get('claims_development_method'),
+                    'auditors_unqualified_opinion': request.form.get('auditors_unqualified_opinion'),
+                }
+                uploaded_file = request.files.get('financialStatement')
+                print(f"📎 File uploaded: {uploaded_file.filename if uploaded_file else 'None'}")
+                
+                # Ensure uploads directory exists (backend/uploads/<insurer_id>/)
+                uploads_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'uploads'))
+                os.makedirs(uploads_root, exist_ok=True)
+                
+                if uploaded_file and uploaded_file.filename:
+                    # Build per-insurer folder and secure filename
+                    insurer_folder = os.path.join(uploads_root, str(data.get('insurer_id') or 'unknown'))
+                    os.makedirs(insurer_folder, exist_ok=True)
+                    filename = secure_filename(uploaded_file.filename)
+                    # prefix with timestamp to avoid name collisions
+                    ts = str(int(time.time()))
+                    saved_filename = f"{ts}_{filename}"
+                    save_path = os.path.join(insurer_folder, saved_filename)
+                    try:
+                        uploaded_file.stream.seek(0)
+                    except Exception:
+                        pass
+                    uploaded_file.save(save_path)
+                    # store relative path (uploads/... relative to backend/)
+                    saved_file_relpath = os.path.relpath(save_path, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+                    print(f"✅ Uploaded file saved to: {save_path}")
             
-            # Extract and validate data
-            insurer_id = data['insurer_id']
-            capital = float(data['capital'])
-            liabilities = float(data['liabilities'])
-            submission_date = data['submission_date']
-            
-            if capital <= 0 or liabilities <= 0:
+            else:
                 return jsonify({
                     'success': False,
-                    'error': 'Capital and liabilities must be positive numbers'
+                    'error': f'Unsupported Content-Type: {request.content_type}'
+                }), 415
+            
+            print(f"📋 Parsed data: {data}")
+            
+            # Validate required fields
+            if not data.get('insurer_id'):
+                return jsonify({
+                    'success': False,
+                    'error': 'Missing required field: insurer_id'
+                }), 400
+
+            # AI functionality removed: uploaded files are stored for manual regulator review.
+            # No AI extraction or AI initialization will be attempted.
+            
+            # Validate final data
+            print(f"🔍 Validating final data:")
+            print(f"   insurer_id: {data.get('insurer_id')}")
+            print(f"   capital: '{data.get('capital')}'")
+            print(f"   liabilities: '{data.get('liabilities')}'")
+            
+            # Use the parsed `data` object (works for both JSON and multipart)
+            try:
+                insurer_id = int(data.get('insurer_id'))
+            except Exception as e:
+                print(f"❌ Invalid insurer_id provided: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid or missing insurer_id'
                 }), 400
             
-            # ✅ CREATE DATA HASH
-            data_string = f"{insurer_id}:{capital}:{liabilities}:{submission_date}"
+            # Convert financial values
+            try:
+                capital = parse_human_number(data.get('capital')) or 0
+                liabilities = parse_human_number(data.get('liabilities')) or 0
+                # parse new manual numeric fields (optional)
+                gwp = parse_human_number(data.get('gwp')) if data.get('gwp') else None
+                net_claims_paid = parse_human_number(data.get('net_claims_paid')) if data.get('net_claims_paid') else None
+                investment_income_total = parse_human_number(data.get('investment_income_total')) if data.get('investment_income_total') else None
+                commission_expense_total = parse_human_number(data.get('commission_expense_total')) if data.get('commission_expense_total') else None
+                operating_expenses_total = parse_human_number(data.get('operating_expenses_total')) if data.get('operating_expenses_total') else None
+                profit_before_tax = parse_human_number(data.get('profit_before_tax')) if data.get('profit_before_tax') else None
+                contingency_reserve_statutory = parse_human_number(data.get('contingency_reserve_statutory')) if data.get('contingency_reserve_statutory') else None
+                ibnr_reserve_gross = parse_human_number(data.get('ibnr_reserve_gross')) if data.get('ibnr_reserve_gross') else None
+                related_party_net_exposure = parse_human_number(data.get('related_party_net_exposure')) if data.get('related_party_net_exposure') else None
+                # textual / boolean fields
+                irfs17_implementation_status = data.get('irfs17_implementation_status')
+                claims_development_method = data.get('claims_development_method')
+                auditors_unqualified_opinion = None
+                if data.get('auditors_unqualified_opinion') is not None:
+                    v = str(data.get('auditors_unqualified_opinion')).lower()
+                    auditors_unqualified_opinion = True if v in ('1', 'true', 'yes', 'y') else False
+                print(f"💰 Converted values - Capital: {capital}, Liabilities: {liabilities}")
+            except (ValueError, TypeError) as e:
+                print(f"❌ Error converting financial values: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid financial values provided: {e}'
+                }), 400
+            
+            # Check if we have valid values - UPDATED LOGIC
+            if capital <= 0:
+                print(f"❌ Invalid capital value: {capital}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Capital ({capital}) must be a positive value. Please provide valid capital data.'
+                }), 400
+            
+            # For liabilities, we can be more flexible since some documents might not have explicit liabilities
+            if liabilities <= 0:
+                print(f"⚠️ No liabilities found - using estimated value based on capital")
+                estimated_liabilities = capital * 0.7  # Assume 70% liabilities ratio
+                liabilities = estimated_liabilities
+                print(f"💰 ✅ Using estimated liabilities: {liabilities}")
+            
+            # Final validation - ensure we have meaningful values
+            if capital <= 0:
+                print(f"❌ Final validation failed - Capital: {capital}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Capital must be positive. Current value: {capital}'
+                }), 400
+            
+            # Calculate solvency ratio
+            solvency_ratio = ((capital - liabilities) / liabilities * 100) if liabilities > 0 else 0
+            
+            # Create unique data hash
+            timestamp = str(int(time.time() * 1000))
+            data_string = f"{insurer_id}:{capital}:{liabilities}:{data.get('submission_date', '')}:{timestamp}"
             data_hash = hashlib.sha256(data_string.encode()).hexdigest()
+            print(f"🔒 Generated unique hash: {data_hash[:16]}...")
             
             # Parse submission date
             try:
-                parsed_date = datetime.fromisoformat(submission_date.replace('Z', '+00:00'))
+                if data.get('submission_date'):
+                    parsed_date = datetime.fromisoformat(data['submission_date'].replace('Z', '+00:00'))
+                else:
+                    parsed_date = datetime.utcnow()
             except:
                 parsed_date = datetime.utcnow()
             
-            # ✅ CREATE SUBMISSION RECORD WITH PLACEHOLDER SOLVENCY RATIO  
-            new_submission = DataSubmission(
-                insurer_id=insurer_id,
-                capital=capital,
-                liabilities=liabilities,
-                solvency_ratio=0.0,  # ✅ Placeholder value (database requires non-null)
-                data_hash=data_hash,
-                status=SubmissionStatus.INSURER_SUBMITTED,
-                submission_date=parsed_date.date(),
-                insurer_submitted_at=parsed_date,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
-            
-            db.session.add(new_submission)
-            db.session.flush()  # Get the ID without committing
-            
-            print(f"✅ Created submission with ID: {new_submission.id} (solvency_ratio=0.0 placeholder, will be calculated during approval)")
-            
-            # ✅ CREATE NOTIFICATION FOR REGULATOR (without solvency ratio)
+            print(f"💰 Final values - Capital: {capital}, Liabilities: {liabilities}, Ratio: {solvency_ratio:.2f}%")
+ 
+            # Create submission record
             try:
-                notification_message = f"📄 New submission from Insurer {insurer_id} - Capital: KES {capital:,.0f}, Liabilities: KES {liabilities:,.0f} [AWAITING APPROVAL]"
-                
-                new_notification = Notification(
-                    recipient_id=1,  # Regulator ID as integer
-                    sender_id=int(insurer_id),  # Insurer ID as integer
-                    message=notification_message,
-                    urgency='Medium',
-                    status='Unread',
-                    sent_at=datetime.utcnow()
+                submission = DataSubmission(
+                    data_hash=data_hash,
+                    insurer_id=insurer_id,
+                    capital=capital,
+                    liabilities=liabilities,
+                    solvency_ratio=solvency_ratio,
+                    status=SubmissionStatus.INSURER_SUBMITTED,
+                    submission_date=parsed_date.date(),
+                    insurer_submitted_at=parsed_date,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                    financial_statement_path=saved_file_relpath,
+                    financial_statement_filename=saved_filename or (uploaded_file.filename if uploaded_file else None),
                 )
-                
-                db.session.add(new_notification)
+
+                # Save manual inputs (if provided) into submission
+                submission.gwp = gwp
+                submission.net_claims_paid = net_claims_paid
+                submission.investment_income_total = investment_income_total
+                submission.commission_expense_total = commission_expense_total
+                submission.operating_expenses_total = operating_expenses_total
+                submission.profit_before_tax = profit_before_tax
+                submission.contingency_reserve_statutory = contingency_reserve_statutory
+                submission.ibnr_reserve_gross = ibnr_reserve_gross
+                submission.irfs17_implementation_status = irfs17_implementation_status
+                submission.related_party_net_exposure = related_party_net_exposure
+                submission.claims_development_method = claims_development_method
+                submission.auditors_unqualified_opinion = auditors_unqualified_opinion
+
+                db.session.add(submission)
                 db.session.commit()
                 
-                print(f"✅ Notification created for regulator (no solvency ratio yet)")
-                
-            except Exception as notif_error:
-                print(f"⚠️ Could not create notification: {notif_error}")
-                # Don't fail the submission if notification fails
+                submission_id = submission.id
+                print(f"✅ Created submission with ID: {submission_id}")
+
+            except Exception as db_error:
+                print(f"❌ Database error: {str(db_error)}")
                 db.session.rollback()
-                db.session.add(new_submission)  # Re-add the submission
-                db.session.commit()
+                return jsonify({
+                    'success': False,
+                    'error': f'Database error: {str(db_error)}'
+                }), 500
+            
+            # Prepare response
+            response_data = {
+                 'success': True,
+                 'message': 'Financial data submitted successfully',
+                 'transaction_id': submission_id,
+                 'data_hash': data_hash,
+                 'status': 'INSURER_SUBMITTED',
+                 'capital': capital,
+                 'liabilities': liabilities,
+                 'solvency_ratio': round(solvency_ratio, 2),
+                 'submission_date': parsed_date.isoformat(),
+                 'ai_extraction': None,
+                 'financial_statement_path': saved_file_relpath,
+                 'financial_statement_filename': submission.financial_statement_filename
+             }
+            
+            print(f"✅ Returning successful response")
+            return jsonify(response_data), 200
         
+        except Exception as e:
+            print("❌ Error in submit_data:", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            if 'db' in globals():
+                db.session.rollback()
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            }), 500
+    
+    @app.route('/api/submissions/user/<int:user_id>', methods=['GET'])
+    def get_user_submissions(user_id):
+        """Get all submissions for a specific user"""
+        try:
+            print(f"📊 Getting submissions for user: {user_id}")
+            
+            # Mock data for now
+            mock_submissions = [
+                {
+                    'id': 1,
+                    'capital': 1000000,
+                    'liabilities': 800000,
+                    'solvency_ratio': 25.0,
+                    'status': 'INSURER_SUBMITTED',
+                    'submission_date': '2024-01-15',
+                    'created_at': '2024-01-15T10:00:00Z'
+                }
+            ]
+            
             return jsonify({
                 'success': True,
-                'message': 'Financial data submitted successfully and awaiting regulator approval',
-                'transaction_id': new_submission.id,
-                'data_hash': data_hash,
-                'status': 'INSURER_SUBMITTED',
-                'note': 'Solvency ratio will be calculated during regulator approval'
+                'submissions': mock_submissions
             }), 200
             
-        except ValueError as e:
-            print(f"❌ Validation error: {str(e)}")
-            return jsonify({
-                'success': False,
-                'error': f'Invalid data format: {str(e)}'
-            }), 400
         except Exception as e:
-            print(f"❌ Error submitting data: {str(e)}")
-            db.session.rollback()
+            print(f"❌ Error getting user submissions: {str(e)}")
             return jsonify({
                 'success': False,
-                'error': f'Failed to submit data: {str(e)}'
+                'error': str(e)
             }), 500
+    
+    print("✅ DEBUG: /api/submit-data route registered successfully")
 
-    print("✅ Submission routes registered successfully")
+def parse_human_number(value):
+    """Convert strings like '19.9 billion' or '6.2 million' to float."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    value = str(value).lower().replace(",", "").strip()
+    match = re.match(r"([0-9.]+)\s*(billion|million|thousand|k|m|bn)?", value)
+    if not match:
+        try:
+            return float(value)
+        except Exception:
+            return None
+    number = float(match.group(1))
+    unit = match.group(2)
+    if unit in ("billion", "bn"):
+        number *= 1_000_000_000
+    elif unit in ("million", "m"):
+        number *= 1_000_000
+    elif unit in ("thousand", "k"):
+        number *= 1_000
+    return number

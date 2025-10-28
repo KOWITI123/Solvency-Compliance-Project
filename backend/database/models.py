@@ -1,8 +1,10 @@
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Enum, ForeignKey, Text, Boolean
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Enum, ForeignKey, Text, Boolean, Numeric
 from sqlalchemy.orm import relationship
 from database.db_connection import db
-import enum
 from datetime import datetime
+import enum
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import ENUM
 
 # Update the UserRole enum to match your database
 class UserRole(enum.Enum):
@@ -10,14 +12,11 @@ class UserRole(enum.Enum):
     regulator = "regulator"  # ← Changed from Regulator to regulator  
     admin = "admin"          # ← Changed from Admin to admin
 
-# Update your enums to match what's in the database
+# Application-level enum that mirrors the DB enum type `submissionstatus`
 class SubmissionStatus(enum.Enum):
-    # Check what values actually exist in your database first
-    PENDING = "PENDING" 
-    INSURER_SUBMITTED = "INSURER_SUBMITTED"  # ✅ Changed from SUBMITTED to match DB
-    REGULATOR_APPROVED = "REGULATOR_APPROVED"  # ✅ Changed from APPROVED to match DB
-    REJECTED = "REJECTED"  # ✅ Use this instead of REGULATOR_REJECTED
-    FINALIZED = "FINALIZED"  # ✅ Added this new status from DB
+    INSURER_SUBMITTED = "INSURER_SUBMITTED"
+    REGULATOR_APPROVED = "REGULATOR_APPROVED"
+    REGULATOR_REJECTED = "REGULATOR_REJECTED"
 
 class ComplianceStatus(enum.Enum):
     Compliant = "Compliant"
@@ -46,32 +45,53 @@ class User(db.Model):
     role = Column(Enum(UserRole), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Ensure a back-reference for submissions exists (do not remove existing fields)
+    # If `submissions` already exists in your file leave it as-is.
+    submissions = relationship("DataSubmission", back_populates="insurer")
+
 class DataSubmission(db.Model):
     __tablename__ = 'data_submissions'
-    
+
+    # ...existing columns...
     id = Column(Integer, primary_key=True)
-    data_hash = Column(String(64), unique=True, nullable=False)
-    capital = Column(Float, nullable=False)  # numeric(15,2) in db
-    liabilities = Column(Float, nullable=False)  # numeric(15,2) in db
-    solvency_ratio = Column(Float, nullable=True)  # numeric(5,2) in db
-    submission_date = Column(Date, nullable=False)
     insurer_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    insurer_submitted_at = Column(DateTime, nullable=True)
-    regulator_id = Column(Integer, ForeignKey('users.id'), nullable=True)
-    regulator_approved_at = Column(DateTime, nullable=True)  # ✅ Keep this name
-    regulator_rejected_at = Column(DateTime, nullable=True)  # ✅ Keep this name
-    regulator_comments = Column(Text, nullable=True)
-    status = Column(Enum(SubmissionStatus), nullable=False)
-    compliance_status = Column(Enum(ComplianceStatus), nullable=True)
-    blockchain_tx_hash = Column(String(66), nullable=True)
-    smart_contract_address = Column(String(42), nullable=True)
-    created_at = Column(DateTime, nullable=True)
-    updated_at = Column(DateTime, nullable=True)
-    blockchain_data = Column(Text, nullable=True)
-    
-    # Relationships
-    insurer = relationship("User", foreign_keys=[insurer_id])
-    regulator = relationship("User", foreign_keys=[regulator_id])
+
+    data_hash = db.Column(String(128), unique=True, nullable=False)
+    capital = db.Column(Numeric, nullable=False)
+    liabilities = db.Column(Numeric, nullable=False)
+    solvency_ratio = db.Column(Float, nullable=True)
+
+    submission_date = db.Column(Date, nullable=True)
+    insurer_submitted_at = db.Column(DateTime, nullable=True)
+    created_at = db.Column(DateTime, default=datetime.utcnow, nullable=True)
+    updated_at = db.Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=True)
+
+    # Status of the submission (mapped to DB enum type `submissionstatus`)
+    # Use SAEnum so SQLAlchemy will bind Python enum -> DB enum correctly.
+    status = Column(SAEnum(SubmissionStatus, name='submissionstatus', native_enum=True), nullable=True)
+
+    # File storage: path relative to backend/ (use this if you want dedicated path column)
+    financial_statement_path = db.Column(String(1024), nullable=True)
+    financial_statement_filename = db.Column(String(512), nullable=True)
+
+    # -- Manual P&L / Regulatory fields (optional, nullable so existing rows remain valid)
+    gwp = Column(Numeric, nullable=True)
+    net_claims_paid = Column(Numeric, nullable=True)
+    investment_income_total = Column(Numeric, nullable=True)
+    commission_expense_total = Column(Numeric, nullable=True)
+    operating_expenses_total = Column(Numeric, nullable=True)
+    profit_before_tax = Column(Numeric, nullable=True)
+
+    # --- Mandatory Regulatory & Governance Disclosures ---
+    contingency_reserve_statutory = Column(Numeric, nullable=True)
+    ibnr_reserve_gross = Column(Numeric, nullable=True)
+    irfs17_implementation_status = Column(String(100), nullable=True)
+    related_party_net_exposure = Column(Numeric, nullable=True)
+    claims_development_method = Column(String(200), nullable=True)
+    auditors_unqualified_opinion = Column(Boolean, nullable=True)
+
+    # relationship back to User (keep if not already present)
+    insurer = relationship("User", back_populates="submissions")
 
 class FinancialData(db.Model):
     __tablename__ = 'financial_data'

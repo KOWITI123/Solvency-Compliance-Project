@@ -1,0 +1,9 @@
+Financial Statement 
+Available Own Funds: KES 600,000,000 
+Solvency Capital Requirement: KES 400,000,000 
+Tier 1 Capital: KES 450,000,000 
+Technical Provisions: KES 300,000,000 
+Solvency Ratio: 125%% 
+Claims Processing Time: Average 25 days 
+Combined Ratio: 95%% 
+ORSA Report: Completed and approved by Board 

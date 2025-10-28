@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { BarChart, Bar, PieChart, Pie, Tooltip, Legend, ResponsiveContainer, Cell, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -20,20 +20,57 @@ import { FaCheck, FaTimes, FaFileAlt, FaUser } from 'react-icons/fa';
 const COLORS = { compliant: 'hsl(var(--chart-2))', nonCompliant: 'hsl(var(--chart-5))' };
 
 // Add new interfaces for regulator functionality
+interface ExtractionMetadata {
+  confidence_score?: string;
+  currency_detected?: string;
+  period_covered?: string;
+}
+
+interface ComplianceMetrics {
+  car?: number;
+  required_capital?: number;
+  available_capital?: number;
+  asset_adequacy?: boolean | string;
+  insurance_service_result?: number;
+  insurance_revenue_growth?: number;
+  insurance_liabilities_adequacy?: boolean | string;
+  reinsurance_strategy?: string;
+  claims_development?: string;
+  internal_controls?: string;
+  board_structure?: string;
+  board_committee_oversight?: string;
+  related_party_transactions?: string;
+  investment_policy_submission?: string;
+}
+
 interface PendingSubmission {
   id: number;
-  data_hash: string;
+  data_hash?: string;
   capital: number;
   liabilities: number;
   solvency_ratio: number;
-  submission_date: string;
-  insurer_submitted_at: string;
   insurer?: {
-    id: number;
-    username: string;
-    email: string;
+    username?: string;
+    email?: string;
   };
   status: string;
+  ai_extraction?: ComplianceMetrics;
+  submission_date?: string;
+  financial_statement_url?: string;
+  financial_statement_filename?: string;
+  // Manual input fields (optional) used in the UI:
+  gwp?: number | string;
+  net_claims_paid?: number | string;
+  investment_income_total?: number | string;
+  commission_expense_total?: number | string;
+  operating_expenses_total?: number | string;
+  profit_before_tax?: number | string;
+  contingency_reserve_statutory?: number | string;
+  ibnr_reserve_gross?: number | string;
+  irfs17_implementation_status?: string;
+  related_party_net_exposure?: number | string;
+  claims_development_method?: string;
+  auditors_unqualified_opinion?: boolean | null;
 }
 
 interface RegulatorNotification {
@@ -69,6 +106,10 @@ export function AuditDashboardPage() {
   const [approvalComments, setApprovalComments] = useState('');
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [aiInsurerId, setAiInsurerId] = useState<string>('');
+  const [aiUploading, setAiUploading] = useState(false);
+  const [aiSummaryResult, setAiSummaryResult] = useState<any | null>(null);
   
   // Existing filters
   const [insurerIdFilter, setInsurerIdFilter] = useState('all');
@@ -135,8 +176,9 @@ export function AuditDashboardPage() {
       const data = await response.json();
       
       if (response.ok) {
+        const shortHash = selectedPendingSubmission.data_hash ? `${selectedPendingSubmission.data_hash.substring(0, 8)}...` : '';
         toast.success('Submission Approved!', {
-          description: `Data hash ${selectedPendingSubmission.data_hash.substring(0, 8)}... has been approved.`
+          description: `Data hash ${shortHash} has been approved.`
         });
         
         fetchPendingSubmissions();
@@ -176,8 +218,9 @@ export function AuditDashboardPage() {
       const data = await response.json();
       
       if (response.ok) {
+        const shortHash = selectedPendingSubmission.data_hash ? `${selectedPendingSubmission.data_hash.substring(0, 8)}...` : '';
         toast.success('Submission Rejected', {
-          description: `Data hash ${selectedPendingSubmission.data_hash.substring(0, 8)}... has been rejected.`
+          description: `Data hash ${shortHash} has been rejected.`
         });
         
         fetchPendingSubmissions();
@@ -195,6 +238,40 @@ export function AuditDashboardPage() {
       });
     } finally {
       setIsRejecting(false);
+    }
+  };
+
+  const uploadAndSummarize = async () => {
+    const fileEl = fileInputRef.current;
+    if (!fileEl || !fileEl.files || fileEl.files.length === 0) {
+      toast.error('Please select a PDF file to upload');
+      return;
+    }
+    const file = fileEl.files[0];
+    setAiUploading(true);
+    setAiSummaryResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (aiInsurerId) fd.append('insurer_id', aiInsurerId);
+
+      const resp = await fetch('http://localhost:5000/api/regulator/upload-and-summarize', {
+        method: 'POST',
+        body: fd
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        toast.success('AI summary generated');
+        setAiSummaryResult(data);
+      } else {
+        toast.error('AI summarization failed', { description: data.error || 'Server error' });
+        setAiSummaryResult({ error: data.error || 'Failed' });
+      }
+    } catch (err) {
+      toast.error('Network error while uploading');
+      setAiSummaryResult({ error: 'Network error' });
+    } finally {
+      setAiUploading(false);
     }
   };
 
@@ -438,6 +515,7 @@ export function AuditDashboardPage() {
           </TabsTrigger>
           <TabsTrigger value="submissions">Detailed Submissions</TabsTrigger>
           <TabsTrigger value="reviews">Reviews Management</TabsTrigger>
+          <TabsTrigger value="ai-summaries">AI Summaries</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -545,401 +623,270 @@ export function AuditDashboardPage() {
                 </CardContent>
               </Card>
             </div>
-          </div>
-        </TabsContent>
+              </div>
+            </TabsContent>
 
-        {/* NEW: Regulatory Approvals Tab - ✅ FIXED SAFE PROPERTY ACCESS */}
-        <TabsContent value="approvals">
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Hash className="h-5 w-5" />
-                  Pending Submissions for Regulatory Approval
-                  <Badge variant="outline">{pendingSubmissions.length}</Badge>
-                </CardTitle>
-                <CardDescription>
-                  Two-stage approval workflow: Insurer submission → Regulator approval
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {Array.isArray(pendingSubmissions) && pendingSubmissions.length > 0 ? (
-                    pendingSubmissions.map((submission, index) => {
-                      // ✅ COMPLETELY SAFE SUBMISSION HANDLING
-                      if (!submission) return null;
-                      
-                      const submissionId = submission.id || `submission-${index}`;
-                      const insurerUsername = (submission.insurer && submission.insurer.username) || 'Unknown Insurer';
-                      const insurerEmail = (submission.insurer && submission.insurer.email) || 'N/A';
-                      const dataHash = submission.data_hash || 'N/A';
-                      const capital = submission.capital || 0;
-                      const liabilities = submission.liabilities || 0;
-                      const solvencyRatio = submission.solvency_ratio || 0;
-                      const submissionDate = submission.submission_date;
-                      const status = submission.status || 'UNKNOWN';
-                      
-                      return (
-                        <div key={submissionId} className="border rounded-lg p-4 bg-gradient-to-r from-blue-50 to-white">
-                          <div className="flex justify-between items-start mb-3">
-                            <div>
-                              <h4 className="font-medium text-lg">{insurerUsername}</h4>
-                              <p className="text-sm text-muted-foreground flex items-center gap-1">
-                                <Hash className="h-3 w-3" />
-                                Data Hash: <code className="bg-gray-100 px-1 rounded text-xs">{dataHash.substring(0, 20)}...</code>
-                              </p>
-                              <p className="text-xs text-muted-foreground mt-1">
-                                Email: {insurerEmail}
-                              </p>
-                            </div>
-                            <div className="flex flex-col items-end gap-2">
-                              {getStatusBadge(status)}
-                              <span className="text-xs text-muted-foreground">
-                                {submissionDate ? new Date(submissionDate).toLocaleDateString() : 'N/A'}
-                              </span>
-                            </div>
-                          </div>
-                          
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 p-3 bg-white rounded border">
-                            <div>
-                              <label className="text-xs text-muted-foreground font-medium">Capital (KES)</label>
-                              <p className="font-bold text-green-600">{capital.toLocaleString()}</p>
-                            </div>
-                            <div>
-                              <label className="text-xs text-muted-foreground font-medium">Liabilities (KES)</label>
-                              <p className="font-bold text-red-600">{liabilities.toLocaleString()}</p>
-                            </div>
-                            <div>
-                              <label className="text-xs text-muted-foreground font-medium">Solvency Ratio</label>
-                              <p className={`font-bold text-lg ${solvencyRatio >= 100 ? 'text-green-600' : 'text-red-600'}`}>
-                                {solvencyRatio}%
-                              </p>
-                            </div>
-                            <div>
-                              <label className="text-xs text-muted-foreground font-medium">Risk Level</label>
-                              <Badge variant={solvencyRatio >= 100 ? 'default' : 'destructive'}>
-                                {solvencyRatio >= 100 ? 'Low Risk' : 'High Risk'}
-                              </Badge>
-                            </div>
-                          </div>
+            {/* NEW: Regulatory Approvals Tab - ✅ FIXED SAFE PROPERTY ACCESS */}
+            <TabsContent value="approvals">
+              <div className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Hash className="h-5 w-5" />
+                      Pending Submissions for Regulatory Approval
+                      <Badge variant="outline">{pendingSubmissions.length}</Badge>
+                    </CardTitle>
+                    <CardDescription>
+                      Two-stage approval workflow: Insurer submission → Regulator approval
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {Array.isArray(pendingSubmissions) && pendingSubmissions.length > 0 ? (
+                        pendingSubmissions.map((submission, index) => {
+                          if (!submission) return null;
+                          const submissionId = submission.id || `submission-${index}`;
+                          const insurerUsername = (submission.insurer && submission.insurer.username) || 'Unknown Insurer';
+                          const insurerEmail = (submission.insurer && submission.insurer.email) || 'N/A';
+                          const dataHash = submission.data_hash || 'N/A';
+                          const capital = submission.capital || 0;
+                          const liabilities = submission.liabilities || 0;
+                          const solvencyRatio = submission.solvency_ratio || 0;
+                          const submissionDate = submission.submission_date;
+                          const status = submission.status || 'UNKNOWN';
 
-                          <div className="flex gap-2">
-                            <Dialog>
-                              <DialogTrigger asChild>
-                                <Button 
-                                  variant="default" 
-                                  size="sm"
-                                  onClick={() => setSelectedPendingSubmission(submission)}
-                                  className="bg-green-600 hover:bg-green-700"
-                                >
-                                  <CheckCircle className="h-4 w-4 mr-2" />
-                                  Review & Approve
-                                </Button>
-                              </DialogTrigger>
-                              <DialogContent className="max-w-3xl">
-                                <DialogHeader>
-                                  <DialogTitle className="flex items-center gap-2">
-                                    <FileCheck className="h-5 w-5" />
-                                    Regulatory Review & Approval
-                                  </DialogTitle>
-                                  <DialogDescription>
-                                    Complete the two-stage approval process for this financial submission
-                                  </DialogDescription>
-                                </DialogHeader>
-                                
-                                {selectedPendingSubmission && (
-                                  <div className="space-y-6">
-                                    <div className="grid grid-cols-2 gap-6 p-4 bg-gray-50 rounded-lg">
-                                      <div className="space-y-3">
+                          return (
+                            <div key={submissionId} className="border rounded-lg p-4 bg-gradient-to-r from-blue-50 to-white">
+                              <div className="flex justify-between items-start mb-3">
+                                <div>
+                                  <h4 className="font-medium text-lg">{insurerUsername}</h4>
+                                  <p className="text-sm text-muted-foreground flex items-center gap-1">
+                                    <Hash className="h-3 w-3" />
+                                    Data Hash: <code className="bg-gray-100 px-1 rounded text-xs">{dataHash.substring(0, 20)}...</code>
+                                  </p>
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    Email: {insurerEmail}
+                                  </p>
+                                </div>
+                                <div className="flex flex-col items-end gap-2">
+                                  {getStatusBadge(status)}
+                                  <span className="text-xs text-muted-foreground">
+                                    {submissionDate ? new Date(submissionDate).toLocaleDateString() : 'N/A'}
+                                  </span>
+                                </div>
+                              </div>
+                              
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 p-3 bg-white rounded border">
+                                <div>
+                                  <label className="text-xs text-muted-foreground font-medium">Capital (KES)</label>
+                                  <p className="font-bold text-green-600">{capital.toLocaleString()}</p>
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground font-medium">Liabilities (KES)</label>
+                                  <p className="font-bold text-red-600">{liabilities.toLocaleString()}</p>
+                                </div>
+                                <div>
+                                  <label className="text-xs text-muted-foreground font-medium">Solvency Ratio</label>
+                                  <p className={`font-bold text-lg ${solvencyRatio >= 100 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {solvencyRatio}%
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex justify-end">
+                                <Dialog>
+                                  <DialogTrigger asChild>
+                                    <Button variant="outline" onClick={() => setSelectedPendingSubmission(submission)}>
+                                      Review &amp; Approve
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent>
+                                    {/* Scrollable container so large dialogs fit small screens */}
+                                    <div className="max-h-[70vh] w-full overflow-y-auto pr-2">
+                                      <DialogHeader>
+                                        <DialogTitle>Review &amp; Approve Submission</DialogTitle>
+                                        <DialogDescription>
+                                          Please review the submission details and leave a comment before approving or rejecting.
+                                        </DialogDescription>
+                                      </DialogHeader>
+                                      <div className="space-y-2">
                                         <div>
-                                          <label className="text-sm font-medium text-gray-700">Insurer Details</label>
-                                          <p className="font-semibold">{(selectedPendingSubmission.insurer && selectedPendingSubmission.insurer.username) || 'Unknown'}</p>
-                                          <p className="text-sm text-gray-600">{(selectedPendingSubmission.insurer && selectedPendingSubmission.insurer.email) || 'No email'}</p>
+                                          <span className="font-semibold">Insurer:</span> {insurerUsername}
                                         </div>
-                                      </div>
-                                      <div className="space-y-3">
                                         <div>
-                                          <label className="text-sm font-medium text-gray-700">Data Hash</label>
-                                          <p className="text-xs font-mono bg-gray-200 p-2 rounded break-all">
-                                            {selectedPendingSubmission.data_hash || 'No hash'}
-                                          </p>
+                                          <span className="font-semibold">Data Hash:</span> <code>{dataHash}</code>
                                         </div>
+                                        <div>
+                                          <span className="font-semibold">Capital:</span> {capital.toLocaleString()}
+                                        </div>
+                                        <div>
+                                          <span className="font-semibold">Liabilities:</span> {liabilities.toLocaleString()}
+                                        </div>
+                                        <div>
+                                          <span className="font-semibold">Solvency Ratio:</span> {solvencyRatio}%
+                                        </div>
+
+                                        {/* Manual Inputs Summary */}
+                                        <div className="mt-4 p-4 bg-gray-50 rounded border">
+                                          <h5 className="font-semibold mb-2">Manual Inputs Summary</h5>
+                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                                            <div><b>GWP:</b> {submission.gwp ?? 'N/A'}</div>
+                                            <div><b>Net Claims Paid:</b> {submission.net_claims_paid ?? 'N/A'}</div>
+                                            <div><b>Investment Income (Total):</b> {submission.investment_income_total ?? 'N/A'}</div>
+                                            <div><b>Commission Expense (Total):</b> {submission.commission_expense_total ?? 'N/A'}</div>
+                                            <div><b>Operating Expenses (Total):</b> {submission.operating_expenses_total ?? 'N/A'}</div>
+                                            <div><b>Profit Before Tax:</b> {submission.profit_before_tax ?? 'N/A'}</div>
+                                            <div><b>Contingency Reserve (Statutory):</b> {submission.contingency_reserve_statutory ?? 'N/A'}</div>
+                                            <div><b>IBNR Reserve (Gross):</b> {submission.ibnr_reserve_gross ?? 'N/A'}</div>
+                                            <div><b>IFRS17 Status:</b> {submission.irfs17_implementation_status ?? 'N/A'}</div>
+                                            <div><b>Related Party Net Exposure:</b> {submission.related_party_net_exposure ?? 'N/A'}</div>
+                                            <div><b>Claims Development Method:</b> {submission.claims_development_method ?? 'N/A'}</div>
+                                            <div><b>Auditors Unqualified Opinion:</b> {submission.auditors_unqualified_opinion ? 'Yes' : (submission.auditors_unqualified_opinion === false ? 'No' : 'N/A')}</div>
+                                          </div>
+
+                                          {/* File link for manual verification */}
+                                          {submission.financial_statement_url && (
+                                            <div className="mt-3">
+                                              <a
+                                                href={submission.financial_statement_url}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="text-blue-600 underline"
+                                              >
+                                                View uploaded financial statement {submission.financial_statement_filename ? `(${submission.financial_statement_filename})` : ''}
+                                              </a>
+                                            </div>
+                                          )}
+                                        </div>
+
+                                        {/* Show only the new compliance metrics */}
+                                        {submission.ai_extraction && (
+                                          <div className="mt-4 p-4 bg-gray-50 rounded border">
+                                            <h5 className="font-semibold mb-2">Compliance Metrics Overview</h5>
+                                            <ul className="text-sm space-y-1">
+                                              <li><b>Capital Adequacy Ratio (CAR):</b> {submission.ai_extraction.car ?? 'N/A'}</li>
+                                              <li><b>Required Capital:</b> {submission.ai_extraction.required_capital ?? 'N/A'}</li>
+                                              <li><b>Available Capital:</b> {submission.ai_extraction.available_capital ?? 'N/A'}</li>
+                                              <li><b>Asset Adequacy:</b> {String(submission.ai_extraction.asset_adequacy ?? 'N/A')}</li>
+                                              <li><b>Insurance Service Result:</b> {submission.ai_extraction.insurance_service_result ?? 'N/A'}</li>
+                                              <li><b>Insurance Revenue Growth:</b> {submission.ai_extraction.insurance_revenue_growth ?? 'N/A'}</li>
+                                              <li><b>Adequacy of Insurance Liabilities:</b> {String(submission.ai_extraction.insurance_liabilities_adequacy ?? 'N/A')}</li>
+                                              <li><b>Reinsurance Strategy & Credit Risk:</b> {submission.ai_extraction.reinsurance_strategy ?? 'N/A'}</li>
+                                              <li><b>Claims Development/Reserving:</b> {submission.ai_extraction.claims_development ?? 'N/A'}</li>
+                                              <li><b>Internal Controls:</b> {submission.ai_extraction.internal_controls ?? 'N/A'}</li>
+                                              <li><b>Board Structure & Independence:</b> {submission.ai_extraction.board_structure ?? 'N/A'}</li>
+                                              <li><b>Board Committee Oversight:</b> {submission.ai_extraction.board_committee_oversight ?? 'N/A'}</li>
+                                              <li><b>Related Party Transactions:</b> {submission.ai_extraction.related_party_transactions ?? 'N/A'}</li>
+                                              <li><b>Investment Policy Submission:</b> {submission.ai_extraction.investment_policy_submission ?? 'N/A'}</li>
+                                            </ul>
+                                          </div>
+                                        )}
+                                        <Label htmlFor="approvalComments" className="mt-2">Comments</Label>
+                                        <Textarea
+                                          id="approvalComments"
+                                          value={approvalComments}
+                                          onChange={e => setApprovalComments(e.target.value)}
+                                          placeholder="Leave a comment (required for rejection)"
+                                        />
                                       </div>
+                                      <DialogFooter className="sticky bottom-0 bg-white/90 mt-4 pt-2">
+                                        <Button
+                                          variant="destructive"
+                                          onClick={rejectSubmission}
+                                          disabled={isRejecting}
+                                        >
+                                          {isRejecting ? 'Rejecting...' : 'Reject'}
+                                        </Button>
+                                        <Button
+                                          variant="default"
+                                          onClick={approveSubmission}
+                                          disabled={isApproving}
+                                        >
+                                          {isApproving ? 'Approving...' : 'Approve'}
+                                        </Button>
+                                      </DialogFooter>
                                     </div>
-                                    
-                                    <div>
-                                      <label className="text-sm font-medium">Regulatory Decision Comments</label>
-                                      <Textarea 
-                                        value={approvalComments}
-                                        onChange={(e) => setApprovalComments(e.target.value)}
-                                        placeholder="Provide regulatory comments and reasoning for your decision..."
-                                        className="mt-2 min-h-[100px]"
-                                      />
-                                    </div>
-                                  </div>
-                                )}
-                                
-                                <DialogFooter className="gap-2">
-                                  <Button 
-                                    variant="outline"
-                                    onClick={() => setSelectedPendingSubmission(null)}
-                                  >
-                                    Cancel
-                                  </Button>
-                                  <Button 
-                                    variant="destructive" 
-                                    onClick={rejectSubmission}
-                                    disabled={isRejecting || isApproving}
-                                  >
-                                    {isRejecting ? 'Rejecting...' : 'Reject Submission'}
-                                  </Button>
-                                  <Button 
-                                    onClick={approveSubmission}
-                                    disabled={isApproving || isRejecting}
-                                    className="bg-green-600 hover:bg-green-700"
-                                  >
-                                    {isApproving ? 'Approving...' : 'Approve Submission'}
-                                  </Button>
-                                </DialogFooter>
-                              </DialogContent>
-                            </Dialog>
-                          </div>
-                        </div>
-                      );
-                    }).filter(Boolean)
-                  ) : (
-                    <div className="text-center py-12 text-muted-foreground">
-                      <FileCheck className="mx-auto h-12 w-12 mb-4" />
-                      <h3 className="text-lg font-medium mb-2">No Pending Approvals</h3>
-                      <p>All submissions have been processed or no new submissions are awaiting approval.</p>
+                                  </DialogContent>
+                                </Dialog>
+                              </div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <p className="text-muted-foreground">No pending submissions for approval.</p>
+                      )}
                     </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="submissions">
-          <Card>
-            <CardHeader>
-              <CardTitle>Insurer Submissions</CardTitle>
-              <CardDescription>Anonymized financial data submissions with filtering options</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {/* Enhanced Filters */}
-              <div className="flex flex-wrap items-center gap-4 mb-6">
-                <Select value={insurerIdFilter} onValueChange={setInsurerIdFilter}>
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder="Filter by Insurer ID" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Insurers</SelectItem>
-                    {uniqueInsurerIds.map(id => (
-                      <SelectItem key={id} value={id}>{id}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-[180px]">
-                    <SelectValue placeholder="Filter by status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="Compliant">Compliant</SelectItem>
-                    <SelectItem value="Non-Compliant">Non-Compliant</SelectItem>
-                  </SelectContent>
-                </Select>
+                  </CardContent>
+                </Card>
               </div>
+            </TabsContent>
 
-              {filteredData && filteredData.length > 0 ? (
-                <div className="border rounded-lg overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Insurer ID</TableHead>
-                        <TableHead>Submission Date</TableHead>
-                        <TableHead>Capital (KES)</TableHead>
-                        <TableHead>Liabilities (KES)</TableHead>
-                        <TableHead>Solvency Ratio</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredData.map((submission) => (
-                        <TableRow key={submission.id}>
-                          <TableCell className="font-medium">
-                            {submission.insurerId}
-                          </TableCell>
-                          <TableCell>
-                            {submission.submittedAt ? format(new Date(submission.submittedAt), 'PPP') : 'No date'}
-                          </TableCell>
-                          <TableCell>
-                            {submission.capital?.toLocaleString() || '0'}
-                          </TableCell>
-                          <TableCell>
-                            {submission.liabilities?.toLocaleString() || '0'}
-                          </TableCell>
-                          <TableCell className="font-medium">
-                            {submission.solvencyRatio?.toFixed(2) || '0.00'}
-                          </TableCell>
-                          <TableCell>
-                            {getStatusBadge(submission.status, submission.solvencyRatio)}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleOpenDialog(submission.id)}
-                              >
-                                <MessageSquare className="h-4 w-4 mr-2" />
-                                Review
-                              </Button>
-                              <Button variant="ghost" size="sm">
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              ) : (
-                <div className="text-center py-12 text-muted-foreground">
-                  <FileCheck className="mx-auto h-12 w-12 mb-4" />
-                  <p>No submissions match your current filters</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
+            /* AI SUMMARIES TAB */
+            <TabsContent value="ai-summaries">
+              <div className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>AI Summaries</CardTitle>
+                    <CardDescription>Upload an insurer financial statement (PDF). Regulator-only feature: generate a downloadable AI summary.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <Label>Insurer ID (optional)</Label>
+                        <Input value={aiInsurerId} onChange={e => setAiInsurerId(e.target.value)} placeholder="Insurer ID (optional)" />
+                      </div>
+                      <div>
+                        <Label>Financial Statement (PDF)</Label>
+                        <input ref={fileInputRef} type="file" accept="application/pdf" />
+                      </div>
+                    </div>
 
-        <TabsContent value="reviews">
-          <Card>
-            <CardHeader>
-              <CardTitle>Review Management</CardTitle>
-              <CardDescription>
-                Manage and track audit reviews
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {reviews && reviews.length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Submission</TableHead>
-                      <TableHead>Review Date</TableHead>
-                      <TableHead>Reviewer</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Comments</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {reviews.map((review) => {
-                      const submission = submissions?.find(s => s.id === review.submissionId);
-                      const anonymizedId = submission ? `INS-${(submission.id.charCodeAt(submission.id.length - 1) % 5) + 101}` : 'Unknown';
-                      return (
-                        <TableRow key={review.id}>
-                          <TableCell className="font-medium">
-                            {anonymizedId}
-                          </TableCell>
-                          <TableCell>
-                            {format(new Date(review.createdAt), 'PPP')}
-                          </TableCell>
-                          <TableCell>
-                            {review.reviewerName || 'Unknown'}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              {getStatusIcon(review.status)}
-                              {getStatusBadge(review.status)}
-                            </div>
-                          </TableCell>
-                          <TableCell className="max-w-md">
-                            <div className="truncate" title={review.comments}>
-                              {review.comments || 'No comments'}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              ) : (
-                <div className="text-center py-12 text-muted-foreground">
-                  <MessageSquare className="mx-auto h-12 w-12 mb-4" />
-                  <p>No reviews submitted yet</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+                    <div className="mt-4 flex gap-2">
+                      <Button onClick={uploadAndSummarize} disabled={aiUploading}>
+                        {aiUploading ? 'Uploading & summarizing...' : 'Upload & Summarize'}
+                      </Button>
+                      <Button variant="outline" onClick={() => { setAiSummaryResult(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}>
+                        Clear
+                      </Button>
+                    </div>
 
-      {/* Review Dialog */}
-      {selectedSubmission && (
-        <Dialog open={true} onOpenChange={(open) => !open && handleCloseDialog()}>
-          <DialogContent className="sm:max-w-[525px]">
-            <DialogHeader>
-              <DialogTitle>Submit Review</DialogTitle>
-              <DialogDescription>
-                Provide your review for the selected submission
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Review Status</Label>
-                <Select 
-                  value={reviewStatus} 
-                  onValueChange={(value: AuditReview['status']) => setReviewStatus(value)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="approved">Approved</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
-                    <SelectItem value="requires_clarification">Requires Clarification</SelectItem>
-                  </SelectContent>
-                </Select>
+                    {aiUploading && <p className="text-sm text-muted-foreground mt-2">Please wait — summarization may take several seconds.</p>}
+
+                    {aiSummaryResult && (
+                      <div className="mt-4 bg-gray-50 p-3 rounded border">
+                        {aiSummaryResult.error ? (
+                          <div className="text-red-600">Error: {aiSummaryResult.error}</div>
+                        ) : (
+                          <>
+                            <h6 className="font-semibold">Narrative</h6>
+                            <p className="whitespace-pre-wrap">{aiSummaryResult.summary?.narrative || 'No narrative'}</p>
+
+                            <h6 className="font-semibold mt-3">Metrics</h6>
+                            <pre className="text-xs bg-white p-2 rounded overflow-auto">{JSON.stringify(aiSummaryResult.summary?.metrics || {}, null, 2)}</pre>
+
+                            {aiSummaryResult.download_summary_url && (
+                              <div className="mt-3">
+                                <a href={aiSummaryResult.download_summary_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                                  Download summary JSON
+                                </a>
+                              </div>
+                            )}
+
+                            {aiSummaryResult.download_summary_pdf_url && (
+                              <div className="mt-2">
+                                <a href={aiSummaryResult.download_summary_pdf_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                                  Download summary PDF
+                                </a>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               </div>
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Comments</Label>
-                <Textarea
-                  placeholder="Enter your review comments..."
-                  value={reviewComment}
-                  onChange={(e) => setReviewComment(e.target.value)}
-                  className="min-h-[100px]"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Additional Comments (Optional)</Label>
-                <Textarea
-                  placeholder="Any additional notes or observations..."
-                  value={additionalComment}
-                  onChange={(e) => setAdditionalComment(e.target.value)}
-                  className="min-h-[80px]"
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={handleCloseDialog}>
-                Cancel
-              </Button>
-              <Button 
-                onClick={handleSubmitReview}
-                disabled={!reviewComment.trim()}
-              >
-                Submit Review
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
-    </div>
-  );
-}
+            </TabsContent>
+          </Tabs>
+        </div>
+      ); // <-- This closes your AuditDashboardPage component
+    }
