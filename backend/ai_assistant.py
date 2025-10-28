@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 import os
 import io
 import json
@@ -612,7 +612,7 @@ def generate_financial_summary(pdf_file_bytes: bytes, title: Optional[str] = Non
         "confidence": summary.confidence,
         "raw_chunk_summaries": summary.raw_chunk_summaries,
     }
-=======
+
 import openai
 import json
 import re
@@ -945,4 +945,3 @@ def test_ai_extraction():
 
 if __name__ == "__main__":
     test_ai_extraction()
->>>>>>> 86c77f4 (added ai agent)
