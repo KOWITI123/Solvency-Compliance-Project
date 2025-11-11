@@ -198,7 +198,7 @@ function StandaloneFileUpload({
             PDF, Excel, Word, Text documents • Max 100MB
           </p>
           <p className="text-xs text-blue-600 mt-2">
-            Upload file for regulator reference and accountability. No automatic AI scanning will be performed.
+            Upload file and AI will automatically extract the required financial entries for regulator review.
           </p>
         </div>
       ) : (
@@ -208,7 +208,7 @@ function StandaloneFileUpload({
             <div className="flex-1 min-w-0">
               <p className="text-sm text-green-800 font-medium truncate">{selectedFile.name}</p>
               <p className="text-xs text-green-600">
-                {formatFileSize(selectedFile.size)} • Uploaded for regulator review (no automatic AI scanning)
+                {formatFileSize(selectedFile.size)} • Uploaded — AI extraction will run and results will be sent to the regulator for review
               </p>
             </div>
             <Button
@@ -314,10 +314,10 @@ const DataInputPage: React.FC = () => {
 
       // If a file is uploaded, we do NOT want server-side AI scanning for now.
       // Add a flag so backend skips AI extraction and only stores the file for manual review.
-      if (file) {
-        submitData.append('no_ai', 'true');
-        console.log('🔧 DEBUG: Added no_ai flag to disable server-side AI extraction');
-      }
+      // if (file) {
+      //   submitData.append('no_ai', 'true');
+      //   console.log('🔧 DEBUG: Added no_ai flag to disable server-side AI extraction');
+      // }
       
       // --- Append new manual fields (P&L / Profitability & Regulatory) ---
       if (formData.gwp) submitData.append('gwp', formData.gwp.toString());
@@ -350,8 +350,7 @@ const DataInputPage: React.FC = () => {
     
     // ✅ ENHANCED: Try multiple API endpoints
     const apiUrls = [
-      '/api/submit-data',
-      'http://localhost:5000/api/submit-data'
+      'http://127.0.0.1:5000/api/submit-data'
     ];
     
     let response: Response | undefined;
@@ -360,10 +359,11 @@ const DataInputPage: React.FC = () => {
     for (const url of apiUrls) {
       try {
         console.log('🔧 DEBUG: Trying URL:', url);
-        
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000);
-        
+        // extend timeout to 2 minutes to allow AI extraction to complete
+        const timeoutMs = 120000;
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    
         response = await fetch(url, {
           method: 'POST',
           body: submitData,
@@ -371,17 +371,32 @@ const DataInputPage: React.FC = () => {
         });
         clearTimeout(timeoutId);
         console.log('🔧 DEBUG: Response from', url, '- status:', response.status);
-        if (response.ok || response.status !== 404) {
+    
+        if (response.ok) {
           break;
         }
+    
+        // capture non-ok responses for UI/logging
+        const clone = response.clone();
+        const errText = await clone.text().catch(() => '<no body>');
+        console.error('🔧 DEBUG: Non-OK response body:', errText);
+        lastError = new Error(`HTTP ${response.status} from ${url}: ${errText}`);
+        response = undefined;
+        continue;
       } catch (error) {
-        console.error('🔧 DEBUG: Fetch error:', error); // <-- Add this line
-        lastError = error as Error;
+        console.error('🔧 DEBUG: Fetch error for', url, error);
+        // handle AbortError (timeout) specially so UI shows clear message
+        if ((error as any)?.name === 'AbortError') {
+          lastError = new Error('Request timeout - please try again (server may be processing large file)');
+        } else {
+          lastError = error as Error;
+        }
         continue;
       }
     }
     
     if (!response) {
+      console.error('🔧 DEBUG: submitToBlockchain error:', lastError);
       throw lastError || new Error('All API endpoints failed');
     }
     
@@ -582,61 +597,6 @@ const DataInputPage: React.FC = () => {
           Submit your financial data for regulatory review and blockchain verification
         </p>
       </div>
-
-      {/* ✅ Submission Method Selection */}
-      {!isSubmissionComplete && (
-        <Card className="bg-gradient-to-r from-blue-50 to-purple-50 border-blue-200">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Zap className="h-5 w-5" />
-              Choose Your Submission Method
-            </CardTitle>
-            <CardDescription>
-              Select how you'd like to submit your financial data
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 bg-white rounded-lg border border-blue-200 hover:border-blue-300 transition-colors">
-                <div className="flex items-start gap-3">
-                  <CloudUpload className="h-6 w-6 text-blue-600 mt-1" />
-                  <div>
-                    <h3 className="font-semibold text-blue-900">File Upload for Regulator Reference</h3>
-                    <p className="text-sm text-blue-700 mt-1">
-                      Upload your financial statement so the regulator can manually verify submitted values.
-                    </p>
-                    <Badge variant="secondary" className="mt-2 bg-blue-100 text-blue-800">
-                      Recommended • Fast • Accurate
-                    </Badge>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="p-4 bg-white rounded-lg border border-purple-200 hover:border-purple-300 transition-colors">
-                <div className="flex items-start gap-3">
-                  <Edit3 className="h-6 w-6 text-purple-600 mt-1" />
-                  <div>
-                    <h3 className="font-semibold text-purple-900">Manual Entry</h3>
-                    <p className="text-sm text-purple-700 mt-1">
-                      Enter your capital and liabilities data manually using the form below.
-                    </p>
-                    <Badge variant="secondary" className="mt-2 bg-purple-100 text-purple-800">
-                      Traditional • Full Control
-                    </Badge>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <div className="mt-4 p-3 bg-green-50 rounded-lg border border-green-200">
-              <p className="text-sm text-green-800">
-                💡 <strong>Pro Tip:</strong> You can use both methods together: upload a file for regulator verification
-                and manually adjust the values if needed.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Error Display */}
       {submissionResult && !submissionResult.success && (
@@ -1132,25 +1092,9 @@ const DataInputPage: React.FC = () => {
 
                   <Separator />
 
-                  <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <div className="flex items-start gap-3">
-                      <Shield className="h-5 w-5 text-blue-600 mt-1" />
-                      <div>
-                        <h4 className="font-medium text-blue-900">Blockchain Security & Submission Options</h4>
-                        <p className="text-sm text-blue-700 mt-1 mb-2">
-                          Your submission will be cryptographically secured on the blockchain.
-                        </p>
-                        <div className="text-xs text-blue-600 space-y-1">
-                          <p>• File upload: AI extracts data automatically</p>
-                          <p>• Manual entry: Full control over your data</p>
-                          <p>• Hybrid: Upload file + manually review/adjust values</p>
-                          <p>• Either method creates the same secure blockchain record</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  {/* Blockchain Security & Submission Options removed per request */}
                 </CardContent>
-
+                
                 <CardFooter className="flex justify-end gap-2">
                   <Button 
                     type="button" 

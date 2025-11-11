@@ -1,0 +1,27 @@
+{
+  "document_title": "1761180047_2020-full-year-audited-group-results.pdf",
+  "narrative": "```json\n{\n  \"narrative\": \"This summary is derived from the 2020 Audited Consolidated Statement of Profit or Loss and Other Comprehensive Income. It provides high-level financial metrics, including Capital at $17,066,832, Liabilities at $119,895,639, and Investment Income at $9,397,384. The source note confirms that related documents, such as the Consolidated Statement of Cash Flows, were part of the original audited materials but are not detailed in this summary.\",\n  \"metrics\": {\n    \"Capital\": 17066832.0,\n    \"Liabilities\": 119895639.0,\n    \"Investment Income\": 9397384.0\n  },\n  \"recommendations\": [\n    \"Review the full 2020 Audited Consolidated Financial Statements to understand the complete financial position and performance.\",\n    \"Obtain comparative data from the prior period (20",
+  "metrics": {
+    "financials": {
+      "capital": 17066832.0,
+      "liabilities": 119895639.0,
+      "solvency_ratio": -85.77,
+      "gwp": null,
+      "net_claims_paid": null,
+      "investment_income_total": 9397384.0,
+      "commission_expense_total": null,
+      "operating_expenses_total": null,
+      "profit_before_tax": null,
+      "contingency_reserve_statutory": null,
+      "ibnr_reserve_gross": null,
+      "related_party_net_exposure": null,
+      "auditors_unqualified_opinion": null
+    }
+  },
+  "recommendations": [],
+  "missing_items": [],
+  "confidence": null,
+  "raw_chunk_summaries": [
+    "{\"title\": \"Summary Consolidated Statement of Profit or Loss and Other Comprehensive Income\", \"key_numbers\": {\"Capital\": 17066832.0, \"Liabilities\": 119895639.0, \"Investment Income\": 9397384.0}, \"notes\": [\"Consolidated Statement of Cash Flows and other disclosures are extracted from the 2020 Audited Consolidated\"], \"missing_items\": []}"
+  ]
+}

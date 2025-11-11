@@ -23,13 +23,15 @@ import { toast } from 'sonner';
 
 interface BlockchainEntry {
   id: number;
-  data_hash: string;
-  capital: number;
-  liabilities: number;
-  solvency_ratio: number;
-  status: string;
-  insurer_submitted_at: string;
+  data_hash?: string;
+  capital?: number;
+  liabilities?: number;
+  solvency_ratio?: number;
+  status?: string;
+  insurer_submitted_at?: string;
   regulator_processed_at?: string;
+  regulator_rejected_at?: string;
+  regulator_approved_at?: string;
   regulator_comments?: string;
   insurer_id: number;
 }
@@ -87,16 +89,17 @@ export function BlockchainLogPage() {
         setSubmissions(submissionData);
         
         // Calculate stats for current user only
+        // normalize status checks to handle DB variants (e.g. "REJECTED" or "REGULATOR_REJECTED")
         const approved = submissionData.filter((sub: BlockchainEntry) => 
-          sub.status === 'REGULATOR_APPROVED'
+          String(sub.status || '').toUpperCase().includes('APPROV')
         ).length;
         
         const rejected = submissionData.filter((sub: BlockchainEntry) => 
-          sub.status === 'REJECTED'
+          String(sub.status || '').toUpperCase().includes('REJECT')
         ).length;
         
         const pending = submissionData.filter((sub: BlockchainEntry) => 
-          sub.status === 'INSURER_SUBMITTED'
+          String(sub.status || '').toUpperCase().includes('INSURER') || String(sub.status || '').toUpperCase().includes('SUBMIT')
         ).length;
         
         const avgSolvency = submissionData.length > 0 ? 
@@ -136,28 +139,39 @@ export function BlockchainLogPage() {
     }
   };
 
-  // ✅ FILTER SUBMISSIONS
+  // ✅ FILTER SUBMISSIONS (defensive: tolerate missing fields)
   useEffect(() => {
-    let filtered = submissions;
+    let filtered = submissions.slice();
 
-    // Search filter
+    // Search filter (safe access)
     if (searchTerm.trim()) {
-      filtered = filtered.filter(sub => 
-        sub.data_hash.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        sub.insurer_id.toString().includes(searchTerm) ||
-        (sub.regulator_comments || '').toLowerCase().includes(searchTerm.toLowerCase())
-      );
+      const q = searchTerm.toLowerCase();
+      filtered = filtered.filter(sub => {
+        const hash = (sub.data_hash || '').toLowerCase();
+        const comments = (sub.regulator_comments || '').toLowerCase();
+        const insurerId = sub.insurer_id?.toString?.() || '';
+        return hash.includes(q) || insurerId.includes(q) || comments.includes(q);
+      });
     }
 
-    // Status filter
+    // Status filter (normalize DB variants)
     if (statusFilter !== 'all') {
-      filtered = filtered.filter(sub => sub.status === statusFilter);
+      const want = String(statusFilter || '').toUpperCase();
+      filtered = filtered.filter(sub => {
+        const up = String(sub.status || '').toUpperCase();
+        if (want === 'REJECTED') return up.includes('REJECT');
+        if (want === 'REGULATOR_APPROVED') return up.includes('APPROV');
+        if (want === 'INSURER_SUBMITTED') return up.includes('INSURER') || up.includes('SUBMIT');
+        return up === want;
+      });
     }
 
-    // Sort by submission date (most recent first)
-    filtered.sort((a, b) => 
-      new Date(b.insurer_submitted_at).getTime() - new Date(a.insurer_submitted_at).getTime()
-    );
+    // Sort by submission date (most recent first) - tolerate missing dates
+    filtered.sort((a, b) => {
+      const ta = a.insurer_submitted_at ? new Date(a.insurer_submitted_at).getTime() : 0;
+      const tb = b.insurer_submitted_at ? new Date(b.insurer_submitted_at).getTime() : 0;
+      return tb - ta;
+    });
 
     setFilteredSubmissions(filtered);
   }, [submissions, searchTerm, statusFilter]);
@@ -205,9 +219,20 @@ export function BlockchainLogPage() {
   };
 
   // ✅ GENERATE BLOCKCHAIN HASH (simulated from data hash)
-  const generateBlockchainHash = (dataHash: string, type: 'submission' | 'approval' | 'rejection') => {
+  const generateBlockchainHash = (dataHash: string | null | undefined, type: 'submission' | 'approval' | 'rejection') => {
+    // Defensive: cope with missing/short hashes from backend
     const prefix = type === 'submission' ? '0x1' : type === 'approval' ? '0x2' : '0x3';
-    return `${prefix}${dataHash.substring(2, 42)}`;
+    try {
+      const raw = String(dataHash || '');
+      // drop leading 0x if present
+      const core = raw.startsWith('0x') ? raw.slice(2) : raw;
+      // ensure at least 40 chars (pad with zeros) and take first 40 chars
+      const padded = (core + '0'.repeat(40)).slice(0, 40);
+      return `${prefix}${padded}`;
+    } catch (e) {
+      // final fallback
+      return `${prefix}${'0'.repeat(40)}`;
+    }
   };
 
   // ✅ EXPORT FUNCTIONALITY
@@ -414,11 +439,11 @@ export function BlockchainLogPage() {
                           <div className="flex items-center gap-2">
                             <Hash className="h-3 w-3" />
                             <code className="bg-gray-100 px-1 rounded">
-                              {generateBlockchainHash(submission.data_hash, 'submission').substring(0, 20)}...
+                              {(generateBlockchainHash(submission.data_hash, 'submission') || '').substring(0, 20)}...
                             </code>
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            Data: {submission.data_hash.substring(0, 16)}...
+                            Data: {(submission.data_hash || '').substring(0, 16)}...
                           </div>
                         </div>
                       </TableCell>
@@ -436,19 +461,19 @@ export function BlockchainLogPage() {
                           <div className="flex justify-between">
                             <span>Capital:</span>
                             <span className="font-medium text-green-600">
-                              KES {submission.capital.toLocaleString()}
+                              KES {(submission.capital ?? 0).toLocaleString()}
                             </span>
                           </div>
                           <div className="flex justify-between">
                             <span>Liabilities:</span>
                             <span className="font-medium text-red-600">
-                              KES {submission.liabilities.toLocaleString()}
+                              KES {(submission.liabilities ?? 0).toLocaleString()}
                             </span>
                           </div>
                           <div className="flex justify-between">
                             <span>Solvency:</span>
-                            <span className={`font-bold ${submission.solvency_ratio >= 100 ? 'text-green-600' : 'text-red-600'}`}>
-                              {submission.solvency_ratio}%
+                            <span className={`font-bold ${((submission.solvency_ratio ?? 0) >= 100) ? 'text-green-600' : 'text-red-600'}`}>
+                              {(submission.solvency_ratio ?? 0)}%
                             </span>
                           </div>
                         </div>
@@ -456,7 +481,7 @@ export function BlockchainLogPage() {
                       <TableCell>
                         <div className="flex items-center gap-1 text-xs">
                           <Clock className="h-3 w-3" />
-                          {format(new Date(submission.insurer_submitted_at), 'MMM dd, HH:mm')}
+                          {submission.insurer_submitted_at ? format(new Date(submission.insurer_submitted_at), 'MMM dd, HH:mm') : '—'}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -464,6 +489,16 @@ export function BlockchainLogPage() {
                           <div className="flex items-center gap-1 text-xs">
                             <Clock className="h-3 w-3" />
                             {format(new Date(submission.regulator_processed_at), 'MMM dd, HH:mm')}
+                          </div>
+                        ) : submission.regulator_rejected_at ? (
+                          <div className="flex items-center gap-1 text-xs">
+                            <Clock className="h-3 w-3" />
+                            {format(new Date(submission.regulator_rejected_at), 'MMM dd, HH:mm')}
+                          </div>
+                        ) : submission.regulator_approved_at ? (
+                          <div className="flex items-center gap-1 text-xs">
+                            <Clock className="h-3 w-3" />
+                            {format(new Date(submission.regulator_approved_at), 'MMM dd, HH:mm')}
                           </div>
                         ) : (
                           <span className="text-muted-foreground text-xs">Pending</span>
@@ -509,120 +544,129 @@ export function BlockchainLogPage() {
                 </Button>
               </div>
               
-              <div className="space-y-6">
-                {/* Transaction Hashes */}
-                <div className="grid grid-cols-1 gap-4">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Blockchain Transaction Hash</label>
-                    <p className="font-mono text-xs bg-blue-50 p-3 rounded border break-all">
-                      {generateBlockchainHash(selectedSubmission.data_hash, 'submission')}
-                    </p>
+                  <div className="space-y-6">
+                                      {/* Transaction Hashes */}
+                                      <div className="grid grid-cols-1 gap-4">
+                                        <div>
+                                          <label className="text-sm font-medium text-gray-700">Blockchain Transaction Hash</label>
+                                          <p className="font-mono text-xs bg-blue-50 p-3 rounded border break-all">
+                                            {generateBlockchainHash(selectedSubmission.data_hash ?? '', 'submission')}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <label className="text-sm font-medium text-gray-700">Data Hash (SHA-256)</label>
+                                          <p className="font-mono text-xs bg-gray-100 p-3 rounded border break-all">
+                                            {selectedSubmission.data_hash ?? 'N/A'}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      
+                                      {/* Status and Insurer Info */}
+                                      <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                          <label className="text-sm font-medium text-gray-700">Transaction Status</label>
+                                          <div className="mt-1">{getStatusBadge(selectedSubmission.status)}</div>
+                                        </div>
+                                        <div>
+                                          <label className="text-sm font-medium text-gray-700">Insurer ID</label>
+                                          <p className="font-medium flex items-center gap-2 mt-1">
+                                            <Building className="h-4 w-4" />
+                                            INS-{selectedSubmission.insurer_id}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      
+                                      {/* Financial Data */}
+                                      <div className="grid grid-cols-3 gap-4 p-4 bg-gray-50 rounded border">
+                                        <div>
+                                          <label className="text-sm font-medium text-gray-700">Capital</label>
+                                          <p className="font-bold text-green-600 text-lg">
+                                            KES {(selectedSubmission.capital ?? 0).toLocaleString()}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <label className="text-sm font-medium text-gray-700">Liabilities</label>
+                                          <p className="font-bold text-red-600 text-lg">
+                                            KES {(selectedSubmission.liabilities ?? 0).toLocaleString()}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <label className="text-sm font-medium text-gray-700">Solvency Ratio</label>
+                                          <p className={`font-bold text-xl ${((selectedSubmission.solvency_ratio ?? 0) >= 100) ? 'text-green-600' : 'text-red-600'}`}>
+                                            {(selectedSubmission.solvency_ratio ?? 0)}%
+                                          </p>
+                                        </div>
+                                      </div>
+                                      
+                                      {/* Timeline */}
+                                      <div className="space-y-3">
+                                        <label className="text-sm font-medium text-gray-700">Transaction Timeline</label>
+                                        <div className="space-y-2">
+                                          <div className="flex items-center gap-3 p-2 bg-blue-50 rounded">
+                                            <FileText className="h-4 w-4 text-blue-600" />
+                                            <div>
+                                              <p className="text-sm font-medium">Submitted by Insurer</p>
+                                              <p className="text-xs text-gray-600">
+                                                {selectedSubmission.insurer_submitted_at ? format(new Date(selectedSubmission.insurer_submitted_at), 'PPP pp') : '—'}
+                                              </p>
+                                            </div>
+                                          </div>
+                                          
+                                          {(selectedSubmission.regulator_processed_at || selectedSubmission.regulator_rejected_at || selectedSubmission.regulator_approved_at) && (
+                                            <div className={`flex items-center gap-3 p-2 rounded ${
+                                              String(selectedSubmission.status || '').toUpperCase().includes('APPROV') ? 'bg-green-50' : String(selectedSubmission.status || '').toUpperCase().includes('REJECT') ? 'bg-red-50' : 'bg-gray-50'
+                                             }`}>
+                                              {(() => {
+                                                const isApproved = String(selectedSubmission.status || '').toUpperCase().includes('APPROV');
+                                                const isRejected = String(selectedSubmission.status || '').toUpperCase().includes('REJECT');
+                                                return (
+                                                  <div className={`flex items-center gap-3 p-2 rounded ${isApproved ? 'bg-green-50' : isRejected ? 'bg-red-50' : 'bg-gray-50'}`}>
+                                                    {isApproved ? <CheckCircle className="h-4 w-4 text-green-600" /> : isRejected ? <XCircle className="h-4 w-4 text-red-600" /> : <FileText className="h-4 w-4 text-gray-600" />}
+                                                    <div>
+                                                      <p className="text-sm font-medium">
+                                                        {isApproved ? 'Approved' : isRejected ? 'Rejected' : 'Processed'} by Regulator
+                                                      </p>
+                                                      <p className="text-xs text-gray-600">
+                                                        {selectedSubmission.regulator_processed_at ? format(new Date(selectedSubmission.regulator_processed_at), 'PPP pp') : (selectedSubmission.regulator_rejected_at ? format(new Date(selectedSubmission.regulator_rejected_at), 'PPP pp') : (selectedSubmission.regulator_approved_at ? format(new Date(selectedSubmission.regulator_approved_at), 'PPP pp') : '—'))}
+                                                      </p>
+                                                    </div>
+                                                  </div>
+                                                );
+                                              })()}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                      
+                                      {/* Regulator Comments */}
+                                      <div>
+                                        <label className="text-sm font-medium text-gray-700">Regulator Comments</label>
+                                        <p className="mt-1 text-sm text-gray-700">
+                                          {selectedSubmission.regulator_comments ? selectedSubmission.regulator_comments : 'No comments provided.'}
+                                        </p>
+                                      </div>
+                      
+                                      {/* Actions */}
+                                      <div className="flex justify-end gap-2">
+                                        <Button variant="outline" onClick={() => {
+                                          // copy data hash to clipboard
+                                          if (selectedSubmission.data_hash) {
+                                            navigator.clipboard?.writeText(selectedSubmission.data_hash);
+                                            toast.success('Data hash copied to clipboard');
+                                          }
+                                        }}>
+                                          <FileText className="h-4 w-4 mr-2" />
+                                          Copy Data Hash
+                                        </Button>
+                                        <Button variant="default" onClick={() => setSelectedSubmission(null)}>
+                                          Close
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                   </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Data Hash (SHA-256)</label>
-                    <p className="font-mono text-xs bg-gray-100 p-3 rounded border break-all">
-                      {selectedSubmission.data_hash}
-                    </p>
-                  </div>
-                </div>
-                
-                {/* Status and Insurer Info */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Transaction Status</label>
-                    <div className="mt-1">{getStatusBadge(selectedSubmission.status)}</div>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Insurer ID</label>
-                    <p className="font-medium flex items-center gap-2 mt-1">
-                      <Building className="h-4 w-4" />
-                      INS-{selectedSubmission.insurer_id}
-                    </p>
-                  </div>
-                </div>
-                
-                {/* Financial Data */}
-                <div className="grid grid-cols-3 gap-4 p-4 bg-gray-50 rounded border">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Capital</label>
-                    <p className="font-bold text-green-600 text-lg">
-                      KES {selectedSubmission.capital.toLocaleString()}
-                    </p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Liabilities</label>
-                    <p className="font-bold text-red-600 text-lg">
-                      KES {selectedSubmission.liabilities.toLocaleString()}
-                    </p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Solvency Ratio</label>
-                    <p className={`font-bold text-xl ${selectedSubmission.solvency_ratio >= 100 ? 'text-green-600' : 'text-red-600'}`}>
-                      {selectedSubmission.solvency_ratio}%
-                    </p>
-                  </div>
-                </div>
-                
-                {/* Timeline */}
-                <div className="space-y-3">
-                  <label className="text-sm font-medium text-gray-700">Transaction Timeline</label>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3 p-2 bg-blue-50 rounded">
-                      <FileText className="h-4 w-4 text-blue-600" />
-                      <div>
-                        <p className="text-sm font-medium">Submitted by Insurer</p>
-                        <p className="text-xs text-gray-600">
-                          {format(new Date(selectedSubmission.insurer_submitted_at), 'PPP pp')}
-                        </p>
-                      </div>
-                    </div>
-                    
-                    {selectedSubmission.regulator_processed_at && (
-                      <div className={`flex items-center gap-3 p-2 rounded ${
-                        selectedSubmission.status === 'REGULATOR_APPROVED' ? 'bg-green-50' : 'bg-red-50'
-                      }`}>
-                        {selectedSubmission.status === 'REGULATOR_APPROVED' ? (
-                          <CheckCircle className="h-4 w-4 text-green-600" />
-                        ) : (
-                          <XCircle className="h-4 w-4 text-red-600" />
-                        )}
-                        <div>
-                          <p className="text-sm font-medium">
-                            {selectedSubmission.status === 'REGULATOR_APPROVED' ? 'Approved' : 'Rejected'} by Regulator
-                          </p>
-                          <p className="text-xs text-gray-600">
-                            {format(new Date(selectedSubmission.regulator_processed_at), 'PPP pp')}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                
-                {/* Regulator Comments */}
-                {selectedSubmission.regulator_comments && (
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Regulator Comments</label>
-                    <p className="p-3 bg-gray-50 rounded border mt-1">
-                      {selectedSubmission.regulator_comments}
-                    </p>
-                  </div>
-                )}
-                
-                {/* Block Information (Simulated) */}
-                <div className="grid grid-cols-2 gap-4 text-sm text-gray-600 border-t pt-4">
-                  <div>
-                    <span className="font-medium">Block Number:</span> #{selectedSubmission.id + 1000}
-                  </div>
-                  <div>
-                    <span className="font-medium">Gas Used:</span> 21,000 wei
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+                );
+              }

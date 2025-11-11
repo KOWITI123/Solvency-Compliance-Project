@@ -1,4 +1,3 @@
-
 import os
 import io
 import json
@@ -26,23 +25,63 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai_assistant")
 
-# Gemini configuration (Gemini-only)
-# Use API-key-only flow to avoid auth ambiguity (set GEMINI_API_KEY in env)
+# Gemini configuration (primary Cloud LLM)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-# prefer an available model by default (adjust via GEMINI_MODEL env var)
-# Use Gemini 2.5 Flash by default (latest, fast, and widely available). Override with GEMINI_MODEL env var if needed.
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Note: GEMINI_MODEL is set to flash by default for lower latency
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash") 
 GEMINI_CHUNK_MODEL = os.getenv("GEMINI_CHUNK_MODEL", GEMINI_MODEL)
+
+# Token and chunk configuration
 CHUNK_SUMMARY_MAX_TOKENS = int(os.getenv("GPT_CHUNK_MAX_TOKENS", "150"))
 CHUNK_MAX_CHARS = int(os.getenv("GPT_CHUNK_MAX_CHARS", str(3000)))
 
-# Operational defaults (ensure these exist for agent initialization)
-GPT_TIMEOUT = int(os.getenv("GPT_TIMEOUT", "60"))
-GPT_RETRIES = int(os.getenv("GPT_RETRIES", "3"))
+# Operational defaults - Increased Timeout/Retries for Resilience
+GPT_TIMEOUT = int(os.getenv("GPT_TIMEOUT", "90"))
+GPT_RETRIES = int(os.getenv("GPT_RETRIES", "4"))
 GPT_MAX_WORKERS = int(os.getenv("GPT_MAX_WORKERS", "1"))
 
 # Cache for discovered available model
 _AVAILABLE_MODEL_CACHE = None
+
+# --- Helper Functions for Numeric Extraction ---
+
+_number_pattern = re.compile(r"[0-9\(\)\,\.\' \-KSkshs%]+", re.IGNORECASE)
+
+def _normalize_number_token(token: str) -> Optional[float]:
+    """Cleans a token string and attempts to convert it to a float."""
+    if not isinstance(token, str):
+        return None
+    
+    # Remove currency, thousands separators, and balance symbols like '000 from KShs '000
+    cleaned = token.strip().replace("KShs", "").replace("Kshs", "").replace("ks", "").replace("k", "")
+    cleaned = cleaned.replace("'", "").replace(",", "").replace("%", "").strip()
+
+    # Handle parenthetical negatives (common in financial statements)
+    if cleaned.startswith('(') and cleaned.endswith(')'):
+        cleaned = "-" + cleaned[1:-1]
+    
+    try:
+        # Final clean-up for common table anomalies
+        if cleaned.endswith(" '000"):
+            cleaned = cleaned.replace(" '000", "").strip()
+        
+        # Check if it's a valid float string
+        if cleaned:
+            return float(cleaned)
+        return None
+    except ValueError:
+        return None
+
+def _extract_first_number_from_text(text: str) -> Optional[float]:
+    """Finds the first plausible number in a line of text using the pattern and normalizes it."""
+    for match in _number_pattern.finditer(text):
+        token = match.group(0)
+        value = _normalize_number_token(token)
+        if value is not None:
+            return value
+    return None
+
+# --- End Helper Functions ---
 
 def _get_available_model() -> Optional[str]:
     """Discover and cache the first available Gemini model that supports generateContent.
@@ -55,22 +94,19 @@ def _get_available_model() -> Optional[str]:
         # First try to get models that support generateContent
         models = _list_gemini_models(filter_for_generation=True)
         if models:
-            # Prefer stable models: prioritize non-preview, non-experimental models
-            # Sort to put stable versions first
-            stable_models = [m for m in models if not any(x in m.lower() for x in ['preview', 'exp', 'experimental'])]
-            preferred_models = stable_models if stable_models else models
+            # FIX: Prioritize Flash over Pro for lower latency
+            for priority_model in ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']:
+                for m in models:
+                    if m == priority_model or priority_model in m:
+                        _AVAILABLE_MODEL_CACHE = m
+                        logger.info("Discovered available generation model (priority -> exact): %s", _AVAILABLE_MODEL_CACHE)
+                        return _AVAILABLE_MODEL_CACHE
             
-            # Further prioritize gemini-2.5-pro and gemini-2.5-flash
-            for priority_model in ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']:
-                if priority_model in preferred_models:
-                    _AVAILABLE_MODEL_CACHE = priority_model
-                    logger.info("Discovered available generation model (priority): %s", _AVAILABLE_MODEL_CACHE)
-                    return _AVAILABLE_MODEL_CACHE
-            
-            # Fall back to first stable model
-            _AVAILABLE_MODEL_CACHE = preferred_models[0]
-            logger.info("Discovered available generation model: %s", _AVAILABLE_MODEL_CACHE)
+            # Fall back to first discovered model if none of the top priorities match
+            _AVAILABLE_MODEL_CACHE = models[0]
+            logger.info("Discovered available generation model (fallback): %s", _AVAILABLE_MODEL_CACHE)
             return _AVAILABLE_MODEL_CACHE
+            
     except Exception as e:
         logger.debug("Could not discover available generation models: %s", e)
     return None
@@ -92,6 +128,18 @@ def _validate_api_key():
 
 # run quick validation at import time to catch obvious key issues early
 _validate_api_key()
+
+# Helper to avoid logging raw API keys in URLs
+def _mask_url(u: str) -> str:
+    try:
+        if "?key=" in u:
+            pre, _ = u.split("?key=", 1)
+            return f"{pre}?key=REDACTED"
+    except Exception:
+        pass
+    return u
+
+# Ollama support removed — no local LLM call function retained.
 
 @dataclass
 class FinancialSummary:
@@ -127,7 +175,8 @@ def _list_gemini_models(filter_for_generation: bool = False) -> List[str]:
     """List available models (uses bearer token when possible or GEMINI_API_KEY).
     If filter_for_generation=True, only return models that support generateContent.
     """
-    base = "https://generativelanguage.googleapis.com/v1beta/models"
+    # use the v1 endpoint (matches the model listing you verified with curl)
+    base = "https://generativelanguage.googleapis.com/v1/models"
     bearer = _get_bearer_token()
     headers = {}
     url = base
@@ -164,18 +213,15 @@ def _list_gemini_models(filter_for_generation: bool = False) -> List[str]:
 
 
 class GPTComplianceAgent:
-    """Gemini-based agent that summarizes insurer financial statements for the regulator."""
+    """AI agent that summarizes insurer financial statements using the Gemini Generative Language API."""
 
     def __init__(self, model: Optional[str] = None):
-        self.model = model or GEMINI_MODEL
-        # Try to discover an available model if the default one might not exist
-        if not model and self.model == GEMINI_MODEL:
-            available = _get_available_model()
-            if available:
-                self.model = available
+        # Use provided model or discover a suitable Gemini model; fall back to GEMINI_MODEL
+        self.model = model or _get_available_model() or GEMINI_MODEL
+        logger.info("Initialized GPTComplianceAgent using Gemini model=%s", self.model)
+         
         self.timeout = GPT_TIMEOUT
         self.retries = GPT_RETRIES
-        logger.info("Initialized GPTComplianceAgent using Gemini model=%s", self.model)
 
     def extract_text_from_pdf(self, pdf_file: bytes) -> str:
         """Extract text from PDF bytes. Returns plain text concatenation of pages."""
@@ -223,11 +269,8 @@ class GPTComplianceAgent:
         return chunks
 
     def _call_gpt(self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.0, model_override: Optional[str] = None) -> str:
-        """Call Google Generative Language API (Gemini) using service-account bearer token or API key.
-        This wrapper guarantees a string return (may be empty) instead of None or raising for typical API
-        failures so the rest of the pipeline can handle empty responses gracefully.
-        """
-        # flatten chat messages into a single prompt for Gemini
+        """Call AI API (Gemini). Returns a string (may be empty) on failure."""
+        # flatten chat messages into a single prompt
         prompt_parts = []
         for m in messages:
             role = m.get("role", "")
@@ -237,75 +280,94 @@ class GPTComplianceAgent:
             else:
                 prompt_parts.append(content)
         prompt_text = "\n\n".join(prompt_parts)
+
         model_to_use = model_override or self.model
 
         def _invoke_once(prompt: str, candidate: str) -> Optional[str]:
-            """Single HTTP attempt; returns string or None on unrecoverable error."""
-            base = "https://generativelanguage.googleapis.com/v1beta/models"
-            url = f"{base}/{candidate}:generateContent"
-            payload = {
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [{"text": prompt}]
-                    }
-                ],
-                "generationConfig": {
-                    "maxOutputTokens": int(max_tokens),
-                    "temperature": float(temperature)
-                }
-            }
+            # Use only the :generate endpoint (v1) with payload shapes known to be accepted.
+            base = "https://generativelanguage.googleapis.com/v1/models"
+            endpoint = f"{base}/{candidate}:generate"
+
             bearer = _get_bearer_token()
-            headers = {"Content-Type": "application/json"}
+            headers_base = {"Content-Type": "application/json"}
             if bearer:
-                headers["Authorization"] = f"Bearer {bearer}"
-            elif GEMINI_API_KEY:
-                url = f"{url}?key={GEMINI_API_KEY}"
-            else:
-                logger.error("No Gemini credentials configured")
-                return None
+                headers_base["Authorization"] = f"Bearer {bearer}"
 
-            try:
-                r = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
-            except requests.RequestException as e:
-                logger.warning("HTTP request to Gemini failed for candidate %s: %s", candidate, e)
-                return None
+            # Keep payload variants minimal and compatible with v1 :generate
+            payload_variants = [
+                {"prompt": {"text": prompt}, "maxOutputTokens": int(max_tokens), "temperature": float(temperature)},
+                {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                 "generationConfig": {"maxOutputTokens": int(max_tokens), "temperature": float(temperature)}},
+            ]
 
-            if r.status_code != 200:
-                body = r.text or ""
+            for payload in payload_variants:
+                url = endpoint if bearer else (f"{endpoint}?key={GEMINI_API_KEY}" if GEMINI_API_KEY else endpoint)
+                headers = dict(headers_base)
                 try:
-                    body = json.dumps(r.json())
-                except Exception:
-                    pass
-                # For 503 (overloaded), return None to trigger retry
-                # For other errors, also return None
-                logger.warning("Gemini API returned %s for candidate=%s; headers=%s body=%s", r.status_code, candidate, dict(r.headers), body)
-                return None
+                    r = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+                except requests.RequestException as e:
+                    logger.debug(
+                        "HTTP request to Gemini failed for candidate %s endpoint=%s payload_variant=%s: %s",
+                        candidate, _mask_url(url), type(payload).__name__, e
+                    )
+                    continue
 
-            # parse successful response
-            try:
-                j = r.json()
-                cand = j.get("candidates", [])
-                if cand and isinstance(cand, list) and len(cand) > 0:
-                    content = cand[0].get("content", {})
+                if r.status_code != 200:
+                    body = r.text or ""
+                    try:
+                        body = json.dumps(r.json())
+                    except Exception:
+                        pass
+                    if r.status_code == 404:
+                        logger.debug("Gemini returned 404 for candidate=%s endpoint=%s", candidate, _mask_url(url))
+                    elif r.status_code in (401, 403):
+                        logger.warning("Gemini authorization error %s for candidate=%s endpoint=%s", r.status_code, candidate, _mask_url(url))
+                    else:
+                        logger.warning("Gemini API returned %s for candidate=%s endpoint=%s body=%s", r.status_code, candidate, _mask_url(url), body)
+                    continue
+
+                try:
+                    j = r.json()
+                except Exception as e:
+                    logger.warning("Failed to parse Gemini JSON for candidate=%s endpoint=%s: %s", candidate, _mask_url(url), e)
+                    continue
+
+                # Handle common response shapes (conservative)
+                if "candidates" in j and isinstance(j["candidates"], list) and j["candidates"]:
+                    cand = j["candidates"][0]
+                    # older shape: content -> parts -> text
+                    content = cand.get("content", {})
                     parts = content.get("parts", [])
-                    if parts and isinstance(parts, list) and len(parts) > 0:
+                    if parts and isinstance(parts, list) and parts:
                         text = parts[0].get("text", "")
                         if text:
                             return str(text).strip()
-                    # Check if we hit MAX_TOKENS or other finish reasons
-                    finish_reason = cand[0].get("finishReason", "")
-                    if finish_reason == "MAX_TOKENS":
-                        logger.warning("Gemini response hit MAX_TOKENS limit for candidate %s", candidate)
-                        return None
-                # No valid content found
-                logger.warning("No valid content in Gemini response for candidate %s", candidate)
-                return None
-            except Exception as e:
-                logger.warning("Failed to parse Gemini JSON response for candidate %s: %s", candidate, e)
-                return None
+                    # newer shape: candidates[].output[].content[].text
+                    if "output" in cand and isinstance(cand["output"], list) and cand["output"]:
+                        out0 = cand["output"][0]
+                        if isinstance(out0, dict) and "content" in out0 and isinstance(out0["content"], list):
+                            for item in out0["content"]:
+                                if isinstance(item, dict) and "text" in item:
+                                    return str(item["text"]).strip()
 
-        # Try a few candidate forms (model id and models/<id>), then try exact available model ids
+                if "output" in j and isinstance(j["output"], list) and j["output"]:
+                    for entry in j["output"]:
+                        if isinstance(entry, dict) and "content" in entry and isinstance(entry["content"], list):
+                            for part in entry["content"]:
+                                if isinstance(part, dict) and "text" in part:
+                                    return str(part["text"]).strip()
+
+                if isinstance(j.get("candidates"), list) and j["candidates"]:
+                    first = j["candidates"][0]
+                    if isinstance(first, str):
+                        return first.strip()
+
+                if isinstance(j.get("text"), str) and j.get("text").strip():
+                    return j.get("text").strip()
+
+                logger.debug("No valid content in Gemini response for candidate=%s endpoint=%s; trying next variant", candidate, _mask_url(url))
+            return None
+
         tried = []
         for candidate in [model_to_use, f"models/{model_to_use}"]:
             tried.append(candidate)
@@ -313,635 +375,339 @@ class GPTComplianceAgent:
                 res = _invoke_once(prompt_text, candidate)
                 if res:
                     return res
-                # transient wait before retrying
                 time.sleep(min(1.0 * attempt, 5.0))
-
-        # try exact available ids from the service (best-effort) - filter for generation models only
-        try:
-            available = _list_gemini_models(filter_for_generation=True)
-            logger.info("Attempting exact available generation model ids: %s", available)
-            for exact in available:
-                tried.append(exact)
-                res = _invoke_once(prompt_text, exact)
-                if res:
-                    logger.info("Using exact model id: %s", exact)
-                    return res
-        except Exception as e:
-            logger.debug("Could not list available Gemini models: %s", e)
 
         logger.error("All Gemini attempts failed (candidates tried: %s). Returning empty string.", tried)
         return ""
 
     def summarize_chunk(self, chunk_text: str, context_instructions: Optional[str] = None, model: Optional[str] = None) -> str:
-        """Extract financial numbers from chunk using Gemini API with fallback to regex."""
+        """Extract financial numbers from chunk using Gemini API with fallback to strict LLM JSON extraction."""
         # First try regex extraction for quick wins
-        key_numbers = {}
-        
-        # More specific patterns that require context (e.g., "Total Capital:" not just "Capital:")
-        patterns = {
-            "Capital": r"(?:total\s+capital|shareholders\s+equity|total\s+equity)[:\s=]+\s*([0-9,\.]+(?:\s+(?:million|billion|thousand|m|b|k))?)",
-            "Liabilities": r"(?:total\s+liabilities)[:\s=]+\s*([0-9,\.]+(?:\s+(?:million|billion|thousand|m|b|k))?)",
-            "GWP": r"(?:gross\s+written\s+premium|gwp)[:\s=]+\s*([0-9,\.]+(?:\s+(?:million|billion|thousand|m|b|k))?)",
-            "Net Claims Paid": r"(?:net\s+claims\s+paid|net\s+claims)[:\s=]+\s*([0-9,\.]+(?:\s+(?:million|billion|thousand|m|b|k))?)",
-            "Investment Income": r"(?:investment\s+income|investment\s+returns)[:\s=]+\s*([0-9,\.]+(?:\s+(?:million|billion|thousand|m|b|k))?)",
-            "Commission Expense": r"(?:commission\s+expense|commissions)[:\s=]+\s*([0-9,\.]+(?:\s+(?:million|billion|thousand|m|b|k))?)",
-            "Operating Expenses": r"(?:operating\s+expense|operating\s+costs)[:\s=]+\s*([0-9,\.]+(?:\s+(?:million|billion|thousand|m|b|k))?)",
-            "Profit Before Tax": r"(?:profit\s+before\s+tax|pbt)[:\s=]+\s*([0-9,\.]+(?:\s+(?:million|billion|thousand|m|b|k))?)",
+        # canonical target keys (match final metrics keys)
+        target_keys = {
+            # Use non-greedy match for Capital/Liabilities to capture the number immediately following the label
+            "capital": r"(?:total\s+equity\s+\(capital\)|total\s+equity)(?:\s*.*?\s*|\s*[:\s=]*)([0-9\(\)\-,\.\sA-Zaz']+)",
+            "liabilities": r"(?:total\s+liabilities)(?:\s*.*?\s*|\s*[:\s=]*)([0-9\(\)\-,\.\sA-Zaz']+)",
+            "solvency_ratio": r"(?:solvency\s+ratio|solvency)[:\s=]*([0-9\.\,\-]+%?)",
+            "auditors_unqualified_opinion": r"(?:(?:auditor(?:'s)?\s+opinion)|(?:opinion\s+of\s+the\s+auditors)).{0,120}",
+            "profit_before_tax": r"(?:profit\s+before\s+tax|pbt)[:\s=]*([0-9\(\)\-,\.\sA-Zaz']+)",
+            "gwp": r"(?:gross\s+written\s+premium|gwp)[:\s=]*([0-9\(\)\-,\.\sA-Zaz']+)",
+            # Specific regex for IBNR to avoid swap with Net Claims
+            "ibnr_reserve_gross": r"(?:IBNR\s+Reserve\s+\(Gross\))(?:\s*.*?\s*|\s*[:\s=]*)([0-9\(\)\-,\.\sA-Zaz']+)",
+            "net_claims_paid": r"(?:Net\s+Claims\s+Paid)[:\s=]*([0-9\(\)\-,\.\sA-Zaz']+)",
+            
+            # Patterns for the financial items
+            "investment_income_total": r"(?:Investment\s+Income)[:\s=]*([0-9\(\)\-,\.\sA-Zaz']+)",
+            "commission_expense_total": r"(?:Commission\s+Expense\s+\(Total\))(?:\s*.*?\s*|\s*[:\s=]*)([0-9\(\)\-,\.\sA-Zaz']+)",
+            "operating_expenses_total": r"(?:Operating\s+Expenses\s+\(Total\))(?:\s*.*?\s*|\s*[:\s=]*)([0-9\(\)\-,\.\sA-Zaz']+)",
+            "contingency_reserve_statutory": r"(?:Contingency\s+Reserve)(?:\s*.*?\s*|\s*[:\s=]*)([0-9\(\)\-,\.\sA-Zaz']+)",
+            
+            "related_party_net_exposure": r"(?:Related\s+Party\s+Net\s+Exposure)(?:\s*.*?\s*|\s*[:\s=]*)([0-9\(\)\-,\.\sA-Zaz']+)",
+            
+            "total_premiums": r"(?:total\s+premiums|net\s+premiums)[:\s=]*([0-9\(\)\-,\.\sA-Zaz']+)",
+            "expenses": r"(?:total\s+expenses|underwriting\s+expenses)[:\s=]*([0-9\(\)\-,\.\sA-Zaz']+)",
+            "profit_after_tax": r"(?:profit\s+after\s+tax|net\s+profit)[:\s=]*([0-9\(\)\-,\.\sA-Zaz']+)",
+            "roe": r"(?:return\s+on\s+equity|roe)[:\s=]*([0-9\.\,\-]+%?)",
+            "combined_ratio": r"(?:combined\s+ratio|cr)[:\s=]*([0-9\.\,\-]+%?)",
+            "loss_ratio": r"(?:loss\s+ratio|lr)[:\s=]*([0-9\.\,\-]+%?)",
+            "expense_ratio": r"(?:expense\s+ratio|er)[:\s=]*([0-9\.\,\-]+%?)",
         }
-        
-        def parse_number(s):
-            if not s:
-                return None
-            s_clean = re.sub(r"[,\s]", "", str(s))
-            s_clean = re.sub(r"[^\d\.\-eE]", "", s_clean)
-            try:
-                return float(s_clean)
-            except Exception:
-                return None
-        
-        # Extract numbers using patterns
-        for key, pattern in patterns.items():
-            matches = re.findall(pattern, chunk_text, re.IGNORECASE)
-            if matches:
-                val = parse_number(matches[0])
-                if val is not None:
-                    key_numbers[key] = val
-        
-        # Extract title (first line or first sentence)
-        lines = chunk_text.split('\n')
-        title = lines[0][:100] if lines else "Financial Data"
-        
-        # Extract notes (any lines with "note", "remark", "disclosure")
-        notes = []
-        for line in lines:
-            if any(keyword in line.lower() for keyword in ['note', 'remark', 'disclosure', 'important']):
-                notes.append(line.strip())
-        
-        # Build JSON response
-        result = {
-            "title": title,
-            "key_numbers": key_numbers,
-            "notes": notes[:3],  # Limit to 3 notes
-            "missing_items": []
-        }
-        
-        return json.dumps(result, ensure_ascii=False)
+        # inverse mapping for strict fallback
+        target_keys_invert = {v: k for k, v in target_keys.items()}
 
-    def synthesize_summaries(self, summaries: List[str]) -> Dict[str, Any]:
-        """Combine per-chunk JSON summaries into a final structured synthesis."""
-        system = (
-            "You are an expert regulator-level summarizer. Combine the provided chunk JSON summaries into a single "
-            "comprehensive summary. Extract and reconcile numeric values, indicate conflicts, and list missing items."
-        )
-        joined = "\n\n".join(summaries)
-        user = (
-            "Here are chunk summaries (JSON objects or text). Combine and produce a final JSON with keys:\n"
-            "narrative (string), metrics (dict), recommendations (list), missing_items (list), confidence (0-100 number)\n\n"
-            "Chunk summaries:\n" + joined
-        )
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        out = self._call_gpt(messages, max_tokens=1500, temperature=0.0)
+        chunk_text = chunk_text.strip()
+
+        # 1. strict JSON extraction attempt
         try:
-            start = out.find("{")
-            end = out.rfind("}")
-            if start != -1 and end != -1:
-                return json.loads(out[start:end + 1])
-        except Exception:
-            logger.exception("Failed to parse synthesis JSON")
-        return {"narrative": out.strip(), "metrics": {}, "recommendations": [], "missing_items": [], "confidence": None}
+            logger.info("Attempting strict JSON extraction on chunk.")
+            msg = [{"role": "user", "content": f"Extract financial metrics from the following text:\n\n{chunk_text}\n\nMetrics: {list(target_keys.keys())}"}]
+            json_res = self._call_gpt(msg, max_tokens=1500, temperature=0.0, model_override=model)
+            logger.info("Raw Gemini response for JSON extraction: %s", json_res)
+            
+            # Explicit logging when Gemini fails to provide a response
+            if not json_res:
+                logger.warning("Gemini API call failed or returned empty response after all retries. Proceeding to heuristic regex fallback.")
+            
+            if json_res:
+                json_res = json_res.strip()
+                # try to parse as JSON
+                if json_res.startswith("{") and json_res.endswith("}"):
+                    try:
+                        jd = json.loads(json_res)
+                        logger.info("Parsed JSON extraction result: %s", jd)
+                        # validate keys
+                        missing_keys = [k for k in target_keys.keys() if k not in jd]
+                        if not missing_keys:
+                            # exact match — return as-is
+                            return json_res
+                        else:
+                            logger.warning("JSON extraction missing keys: %s", missing_keys)
+                    except json.JSONDecodeError:
+                        logger.warning("JSON extraction result not valid JSON: %s", json_res)
+                else:
+                    logger.warning("JSON extraction result not enclosed in braces: %s", json_res)
+        except Exception as e:
+            logger.exception("Error during strict JSON extraction: %s", e)
 
-    def extract_structured_metrics(self, chunk_summaries: List[str]) -> Dict[str, Any]:
-        """Extract financial metrics from already-generated chunk summaries.
-        This is more efficient than re-processing the full text.
-        """
-        schema_keys = [
+        # 2. fallback to regex and heuristics
+        logger.info("Falling back to regex and heuristic extractions.")
+        metrics = {}
+        for key, pattern in target_keys.items():
+            try:
+                logger.info("Extracting %s using pattern: %s", key, pattern)
+
+                # First try inline "label ... number" pattern
+                inline_re = re.compile(pattern, re.IGNORECASE)
+                m = inline_re.search(chunk_text)
+                if m and m.group(1):
+                    # m.group(1) captures the value portion defined in the target_keys regex
+                    v = _normalize_number_token(m.group(1))
+                    if v is not None:
+                        metrics[key] = v
+                        continue
+                        
+                # Otherwise search line-by-line neighbours (Fallback for remaining fields)
+                lines = [l for l in chunk_text.splitlines()]
+                found_value = None
+
+                # Simplified label extraction for line-by-line search
+                # Use highly specific regex matching for the line-by-line scan to anchor the search
+                label_re = re.compile(r"|PricewaterhouseCoopers|IFRS|KShs '000", re.IGNORECASE) # Default very generic
+
+                if key == 'capital':
+                    label_re = re.compile(r"(Total\s+Equity\s+\(Capital\)|Total\s+Equity)", re.IGNORECASE)
+                elif key == 'liabilities':
+                    label_re = re.compile(r"Total\s+Liabilities", re.IGNORECASE)
+                elif key == 'profit_before_tax':
+                    label_re = re.compile(r"Profit\s+Before\s+Tax", re.IGNORECASE)
+                elif key == 'gwp':
+                    label_re = re.compile(r"Gross\s+Written\s+Premium", re.IGNORECASE)
+                elif key == 'net_claims_paid':
+                    label_re = re.compile(r"Net\s+Claims\s+Paid", re.IGNORECASE)
+                elif key == 'investment_income_total':
+                    label_re = re.compile(r"Investment\s+Income", re.IGNORECASE)
+                elif key == 'commission_expense_total':
+                    label_re = re.compile(r"Commission\s+Expense\s+\(Total\)", re.IGNORECASE)
+                elif key == 'operating_expenses_total':
+                    label_re = re.compile(r"Operating\s+Expenses\s+\(Total\)", re.IGNORECASE)
+                elif key == 'contingency_reserve_statutory':
+                    label_re = re.compile(r"Contingency\s+Reserve", re.IGNORECASE)
+                elif key == 'ibnr_reserve_gross':
+                    label_re = re.compile(r"IBNR\s+Reserve\s+\(Gross\)", re.IGNORECASE)
+                elif key == 'related_party_net_exposure':
+                    label_re = re.compile(r"Related\s+Party\s+Net\s+Exposure", re.IGNORECASE)
+                elif key == 'auditors_unqualified_opinion':
+                    label_re = re.compile(r"auditor(?:'s)?\s+opinion|opinion\s+of\s+the\s+auditors", re.IGNORECASE)
+                elif key == 'solvency_ratio':
+                    label_re = re.compile(r"solvency\s+ratio", re.IGNORECASE)
+
+
+                for i, line in enumerate(lines):
+                    # Check if the line contains the label
+                    if label_re.search(line):
+                        # 1. Try extracting from the line containing the keyword (for cleaner extraction)
+                        nv = _extract_first_number_from_text(line)
+                        if nv is not None:
+                            found_value = nv
+                            break
+                        
+                        # 2. Look ahead up to 2 lines (for the table value)
+                        if found_value is None:
+                            for j in range(i + 1, min(i + 3, len(lines))):
+                                nv = _extract_first_number_from_text(lines[j]) 
+                                if nv is not None:
+                                    found_value = nv
+                                    break
+                        
+                        # 3. Look back up to 2 lines
+                        if found_value is None:
+                            for j in range(max(0, i - 2), i):
+                                nv = _extract_first_number_from_text(lines[j]) 
+                                if nv is not None:
+                                    found_value = nv
+                                    break
+                                    
+                    if found_value is not None:
+                        metrics[key] = found_value
+                        break # Found for this key, move to the next key
+
+            except Exception as e:
+                logger.exception("Error extracting key %s: %s", key, e)
+
+        logger.info("Extracted metrics: %s", metrics)
+        
+        # Define keys that require the 1000 scaling (i.e., monetary figures in KShs '000)
+        # FIX: Restrict this list to only the core monetary figures, excluding spurious/ratio keys.
+        KSHS_THOUSANDS_KEYS = {
+            "capital", "liabilities", "gwp", "ibnr_reserve_gross", "net_claims_paid", 
+            "investment_income_total", "commission_expense_total", "operating_expenses_total", 
+            "contingency_reserve_statutory", "profit_before_tax", "related_party_net_exposure"
+        }
+
+        # post-process common fields (Scaling, k/m/b, and 1000 multiplier)
+        for k in target_keys.keys():
+            if k in metrics and metrics[k] is not None:
+                try:
+                    v = metrics[k]
+                    original_v_str = str(v)
+                    scaled_by_suffix = False
+
+                    if isinstance(v, str):
+                        # 1. Check for explicit K/M/B scaling *first*
+                        if re.search(r'[a-zA-Z]', original_v_str):
+                            v_cleaned = original_v_str.replace(",", "").replace(" ", "").strip()
+                            scale = 1.0
+                            if v_cleaned.lower().endswith("b"):
+                                scale = 1e9
+                                v_cleaned = v_cleaned[:-1]
+                            elif v_cleaned.lower().endswith("m"):
+                                scale = 1e6
+                                v_cleaned = v_cleaned[:-1]
+                            elif v_cleaned.lower().endswith("k"):
+                                scale = 1e3
+                                v_cleaned = v_cleaned[:-1]
+                            
+                            v_cleaned = v_cleaned.replace(",", "").replace(" ", "").strip()
+                            if v_cleaned.startswith('(') and v_cleaned.endswith(')'):
+                                v_cleaned = "-" + v_cleaned[1:-1]
+                            
+                            if v_cleaned:
+                                v = float(v_cleaned) * scale
+                                scaled_by_suffix = True
+                            else:
+                                continue
+                        # If no suffix, normalize to float
+                        else:
+                            v = float(v)
+                    
+                    # 2. Apply 1000 scaling to financial amounts only if in the restrictive list
+                    #    AND only if not already scaled by an explicit K/M/B suffix
+                    if k in KSHS_THOUSANDS_KEYS and not scaled_by_suffix:
+                        v = float(v) * 1000.0 # Multiply by 1000
+                        logger.info("Applied 1000 scaling to key %s: %f", k, v)
+
+
+                    metrics[k] = v
+                except Exception as e:
+                    logger.warning("Error processing metric %s value %s: %s", k, metrics[k], e)
+
+        # promote or add missing fields as null
+        for k in target_keys.keys():
+            if k not in metrics:
+                metrics[k] = None
+
+        logger.info("Final extracted metrics: %s", metrics)
+        return metrics
+
+    def summarize_document(self, pdf_file_bytes: bytes, document_title: Optional[str] = None) -> FinancialSummary:
+        """Extract text from a PDF, call summarize_chunk for each chunk and aggregate metrics."""
+        text = self.extract_text_from_pdf(pdf_file_bytes)
+        summary = FinancialSummary(document_title=document_title or None)
+        if not text:
+            logger.warning("summarize_document: no text extracted from PDF")
+            summary.narrative = ""
+            return summary
+
+        chunks = self._chunk_text(text)
+        raw_chunk_summaries: List[str] = []
+        expected_keys = [
             "capital",
             "liabilities",
             "solvency_ratio",
+            "auditors_unqualified_opinion",
+            "profit_before_tax",
             "gwp",
+            "ibnr_reserve_gross",
             "net_claims_paid",
             "investment_income_total",
             "commission_expense_total",
             "operating_expenses_total",
-            "profit_before_tax",
             "contingency_reserve_statutory",
-            "ibnr_reserve_gross",
             "related_party_net_exposure",
-            "auditors_unqualified_opinion",
         ]
-        
-        # Parse chunk summaries to extract numeric values
-        extracted_metrics = {}
-        
-        # Join all summaries for searching
-        all_summaries = "\n".join(chunk_summaries)
-        logger.info("Searching for metrics in %d chunk summaries (total length: %d chars)", len(chunk_summaries), len(all_summaries))
-        
-        # Log first chunk summary for debugging
-        if chunk_summaries:
-            logger.info("First chunk summary (first 500 chars): %s", chunk_summaries[0][:500])
-        
-        def parse_number(s):
-            if not s:
-                return None
-            s_clean = re.sub(r"[,\s]", "", str(s))
-            s_clean = re.sub(r"[^\d\.\-eE]", "", s_clean)
+        aggregated: Dict[str, Any] = {k: None for k in expected_keys}
+        missing_items: List[str] = []
+
+        for idx, chunk in enumerate(chunks):
             try:
-                return float(s_clean)
-            except Exception:
-                return None
-        
-        # Try to extract from JSON key_numbers if present
+                metrics = self.summarize_chunk(chunk)
+                # normalize if summarize_chunk returned JSON string
+                if isinstance(metrics, str):
+                    try:
+                        metrics = json.loads(metrics)
+                    except Exception:
+                        # keep as-is if not JSON
+                        pass
+                raw_chunk_summaries.append(str(metrics))
+                if isinstance(metrics, dict):
+                    # For non-overlapping keys, take the first value found
+                    for k, v in metrics.items():
+                        # Only take a value if we haven't found one yet and the value is not empty/None
+                        if k in aggregated and aggregated.get(k) is None and v not in (None, ""):
+                            # Apply additional aggregation logic for specific fields
+                            if k == 'auditors_unqualified_opinion':
+                                # Only keep if the text suggests 'unqualified' or 'clean'
+                                if isinstance(v, str) and ('unqualified' in v.lower() or 'clean' in v.lower()):
+                                    aggregated[k] = v
+                            # For financial amounts, we might need a better heuristic, but for now, take the first non-null
+                            elif k in expected_keys:
+                                # Ensure we don't accidentally get an empty string or non-numeric placeholder
+                                if v is not None and v != '':
+                                    aggregated[k] = v
+                            # For ratios, only take if it looks like a valid ratio (e.g., contains a %)
+                            elif k == 'solvency_ratio':
+                                if isinstance(v, str) and '%' in v:
+                                    # Simple regex to extract the number from a string like '150%'
+                                    ratio_match = re.search(r'([0-9\.\,]+)%?', v)
+                                    if ratio_match:
+                                        try:
+                                            # Store as a float percentage (e.g., 150.0)
+                                            aggregated[k] = float(ratio_match.group(1).replace(',', ''))
+                                        except ValueError:
+                                            pass
+                            else:
+                                aggregated[k] = v
+                                
+                    # Special Case: Manually check for 'auditors_unqualified_opinion' in the raw text if not found in metrics
+                    if aggregated.get("auditors_unqualified_opinion") is None:
+                        # Note: The pattern in target_keys is for finding the *mention* of opinion, not extracting its state.
+                        # Since the full document text is available in 'text', we search it directly.
+                        if re.search(r'Auditor(?:s)?\'? (?:Unqualified|Clean) Opinion', text, re.IGNORECASE):
+                            aggregated["auditors_unqualified_opinion"] = "Unqualified (Found in text)"
+                        elif re.search(r'qualified opinion|adverse opinion|disclaimer of opinion', text, re.IGNORECASE):
+                            # Log if a negative opinion is found, though we only track 'unqualified' as a positive flag
+                            logger.warning("Found evidence of a Qualified/Adverse/Disclaimer of Opinion.")
+
+
+            except Exception as e:
+                logger.debug("summarize_document: failed on chunk %d: %s", idx, e)
+
+        # compute solvency_ratio if possible
         try:
-            json_parsed_count = 0
-            for idx, summary in enumerate(chunk_summaries):
-                if not summary:
-                    continue
-                # Try to parse as JSON
-                try:
-                    obj = json.loads(summary)
-                    json_parsed_count += 1
-                    if isinstance(obj, dict) and "key_numbers" in obj:
-                        key_nums = obj["key_numbers"]
-                        if isinstance(key_nums, dict):
-                            logger.info("Found key_numbers in chunk %d: %s", idx, list(key_nums.keys()))
-                            for k, v in key_nums.items():
-                                k_lower = k.lower()
-                                # Map common key names to schema keys
-                                if "capital" in k_lower or "equity" in k_lower:
-                                    val = parse_number(v)
-                                    if val and "capital" not in extracted_metrics:
-                                        extracted_metrics["capital"] = val
-                                        logger.info("Extracted capital: %s", val)
-                                elif "liabil" in k_lower:
-                                    val = parse_number(v)
-                                    if val and "liabilities" not in extracted_metrics:
-                                        extracted_metrics["liabilities"] = val
-                                        logger.info("Extracted liabilities: %s", val)
-                                elif "gwp" in k_lower or "gross.*written" in k_lower:
-                                    val = parse_number(v)
-                                    if val and "gwp" not in extracted_metrics:
-                                        extracted_metrics["gwp"] = val
-                                        logger.info("Extracted gwp: %s", val)
-                                elif "claims" in k_lower and "paid" in k_lower:
-                                    val = parse_number(v)
-                                    if val and "net_claims_paid" not in extracted_metrics:
-                                        extracted_metrics["net_claims_paid"] = val
-                                        logger.info("Extracted net_claims_paid: %s", val)
-                                elif "investment" in k_lower and "income" in k_lower:
-                                    val = parse_number(v)
-                                    if val and "investment_income_total" not in extracted_metrics:
-                                        extracted_metrics["investment_income_total"] = val
-                                        logger.info("Extracted investment_income_total: %s", val)
-                                elif "commission" in k_lower:
-                                    val = parse_number(v)
-                                    if val and "commission_expense_total" not in extracted_metrics:
-                                        extracted_metrics["commission_expense_total"] = val
-                                        logger.info("Extracted commission_expense_total: %s", val)
-                                elif "operating" in k_lower and "expense" in k_lower:
-                                    val = parse_number(v)
-                                    if val and "operating_expenses_total" not in extracted_metrics:
-                                        extracted_metrics["operating_expenses_total"] = val
-                                        logger.info("Extracted operating_expenses_total: %s", val)
-                                elif "profit" in k_lower and "tax" in k_lower:
-                                    val = parse_number(v)
-                                    if val and "profit_before_tax" not in extracted_metrics:
-                                        extracted_metrics["profit_before_tax"] = val
-                                        logger.info("Extracted profit_before_tax: %s", val)
-                except (json.JSONDecodeError, ValueError) as e:
-                    pass
-            logger.info("Successfully parsed %d chunk summaries as JSON", json_parsed_count)
-        except Exception as e:
-            logger.debug("Error extracting from JSON key_numbers: %s", e)
-        
-        # Fallback: use regex patterns on raw text
-        patterns = {
-            "capital": [r"capital[:\s]+([0-9,\.]+)", r"equity[:\s]+([0-9,\.]+)", r"shareholders.*equity[:\s]+([0-9,\.]+)"],
-            "liabilities": [r"liabilities[:\s]+([0-9,\.]+)", r"total.*liabilities[:\s]+([0-9,\.]+)"],
-            "gwp": [r"gwp[:\s]+([0-9,\.]+)", r"gross.*written.*premium[:\s]+([0-9,\.]+)"],
-            "net_claims_paid": [r"net.*claims.*paid[:\s]+([0-9,\.]+)", r"claims.*paid[:\s]+([0-9,\.]+)"],
-            "investment_income_total": [r"investment.*income[:\s]+([0-9,\.]+)", r"total.*investment.*income[:\s]+([0-9,\.]+)"],
-            "commission_expense_total": [r"commission.*expense[:\s]+([0-9,\.]+)", r"commissions.*paid[:\s]+([0-9,\.]+)"],
-            "operating_expenses_total": [r"operating.*expense[:\s]+([0-9,\.]+)", r"total.*operating.*expense[:\s]+([0-9,\.]+)"],
-            "profit_before_tax": [r"profit.*before.*tax[:\s]+([0-9,\.]+)", r"pbt[:\s]+([0-9,\.]+)"],
-            "auditors_unqualified_opinion": [r"unqualified.*opinion", r"auditors.*opinion.*unqualified"],
-        }
-        
-        # Extract metrics using patterns (only if not already found)
-        for key, pattern_list in patterns.items():
-            if key in extracted_metrics:
-                continue
-            for pattern in pattern_list:
-                matches = re.findall(pattern, all_summaries, re.IGNORECASE)
-                if matches:
-                    if key == "auditors_unqualified_opinion":
-                        extracted_metrics[key] = True
-                    else:
-                        # Take the first match and parse it
-                        val = parse_number(matches[0])
-                        if val is not None:
-                            extracted_metrics[key] = val
-                            break
-        
-        # Calculate solvency ratio if we have capital and liabilities
-        if "capital" in extracted_metrics and "liabilities" in extracted_metrics:
-            try:
-                capital = extracted_metrics["capital"]
-                liabilities = extracted_metrics["liabilities"]
-                if capital is not None and liabilities is not None and liabilities != 0:
-                    extracted_metrics["solvency_ratio"] = round(((capital - liabilities) / liabilities) * 100, 2)
-            except Exception:
-                pass
-        
-        logger.info("Extracted metrics from chunk summaries: %s", extracted_metrics)
-        
-        # Build result with all schema keys, using extracted values or None
-        result = {k: None for k in schema_keys}
-        result.update(extracted_metrics)
-        
-        return result
-
-    def summarize_document(self, pdf_bytes: bytes, document_title: Optional[str] = None) -> FinancialSummary:
-        """Full pipeline: extract text, chunk, summarize per-chunk, synthesize, extract structured metrics."""
-        full_text = self.extract_text_from_pdf(pdf_bytes)
-        fs = FinancialSummary(document_title=document_title)
-        if not full_text:
-            fs.narrative = "No text could be extracted from the provided PDF."
-            fs.missing_items = ["document_text"]
-            return fs
-
-        chunks = self._chunk_text(full_text)
-        chunk_summaries = []
-        max_workers = min(3, max(1, int(os.getenv("GPT_MAX_WORKERS", str(GPT_MAX_WORKERS)))))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = [ex.submit(self.summarize_chunk, c, model=GEMINI_CHUNK_MODEL) for c in chunks]
-            for f in concurrent.futures.as_completed(futures):
-                try:
-                    s = f.result()
-                except Exception as e:
-                    logger.warning("Chunk summarization failed: %s", e)
-                    s = ""
-                if s:
-                    chunk_summaries.append(s)
-        fs.raw_chunk_summaries = chunk_summaries
-
-        synth = self.synthesize_summaries(chunk_summaries)
-        fs.narrative = synth.get("narrative", "")
-        fs.metrics = synth.get("metrics", {})
-        fs.recommendations = synth.get("recommendations", [])
-        fs.missing_items = synth.get("missing_items", [])
-        fs.confidence = synth.get("confidence")
-
-        # Extract structured metrics from chunk summaries (more efficient than re-processing full text)
-        metrics = self.extract_structured_metrics(chunk_summaries)
-        fs.metrics.setdefault("financials", {}).update(metrics or {})
-
-        return fs
-
-
-# convenience function for legacy codepaths
-def generate_financial_summary(pdf_file_bytes: bytes, title: Optional[str] = None) -> Dict[str, Any]:
-    agent = GPTComplianceAgent()
-    summary = agent.summarize_document(pdf_file_bytes, document_title=title)
-    return {
-        "document_title": summary.document_title,
-        "narrative": summary.narrative,
-        "metrics": summary.metrics,
-        "recommendations": summary.recommendations,
-        "missing_items": summary.missing_items,
-        "confidence": summary.confidence,
-        "raw_chunk_summaries": summary.raw_chunk_summaries,
-    }
-
-import openai
-import json
-import re
-import logging
-import os
-from typing import Dict, Any, Optional, List
-from datetime import datetime
-import PyPDF2
-import io
-from dataclasses import dataclass
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-@dataclass
-class FinancialExtractionResult:
-    """Data class to hold extracted financial information"""
-    # Pillar 1: Quantitative & Solvency
-    available_solvency_margin: Optional[float] = None
-    required_solvency_margin: Optional[float] = None
-    tier_1_capital: Optional[float] = None
-    total_technical_provisions: Optional[float] = None
-    unearned_premium_reserves: Optional[float] = None
-    outstanding_claims_reserves: Optional[float] = None
-    reported_solvency_ratio: Optional[float] = None
-    
-    # Pillar 2: Risk & Governance
-    orsa_report_status: Optional[str] = None
-    fit_and_proper_status: Optional[str] = None
-    reinsurance_program_status: Optional[str] = None
-    
-    # Pillar 3: Transparency & Market Conduct
-    claims_turnaround_time: Optional[float] = None
-    reported_combined_ratio: Optional[float] = None
-    complaint_ratio: Optional[float] = None
-    compliance_audit_status: Optional[str] = None
-    
-    # Additional extracted data (for calculations elsewhere)
-    earned_premium: Optional[float] = None
-    incurred_losses: Optional[float] = None
-    operating_expenses: Optional[float] = None
-    
-    # Extraction metadata
-    extraction_confidence: Optional[float] = None
-    missing_data_items: List[str] = None
-    extraction_notes: List[str] = None
-
-class FinancialStatementAI:
-    """AI Agent for extracting financial information from insurance statements"""
-    
-    def __init__(self, api_key: Optional[str] = None):
-        # Get API key from environment if not provided
-        if api_key is None:
-            api_key = os.getenv('OPENAI_API_KEY')
-        
-        if not api_key:
-            raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY in your .env file")
-        
-        self.client = openai.OpenAI(api_key=api_key)
-        
-        self.model = "gpt-5-mini"
-        logger.info(f"🤖 Initialized AI Assistant with model: {self.model}")
-        
-    def extract_text_from_pdf(self, pdf_file) -> str:
-        """Extract text content from uploaded PDF file"""
-        try:
-            if hasattr(pdf_file, 'read'):
-                pdf_content = pdf_file.read()
-            else:
-                pdf_content = pdf_file
-                
-            pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_content))
-            text_content = ""
+            # Need to ensure capital and liabilities are in the same scale (KShs '000 in this case)
+            cap = aggregated.get("capital")
+            liab = aggregated.get("liabilities")
             
-            for page_num in range(len(pdf_reader.pages)):
-                page = pdf_reader.pages[page_num]
-                text_content += page.extract_text() + "\n"
-                
-            logger.info(f"📄 Extracted {len(text_content)} characters from PDF")
-            return text_content
+            # Ensure they are numeric (float/int) before calculation
+            if isinstance(cap, str): cap = _normalize_number_token(cap)
+            if isinstance(liab, str): liab = _normalize_number_token(liab)
             
-        except Exception as e:
-            logger.error(f"❌ Error extracting PDF text: {str(e)}")
-            return ""
-    
-    def create_extraction_prompt(self, document_text: str) -> str:
-        """Create a comprehensive prompt for GPT to extract financial data"""
-        return f"""
-You are an expert financial analyst specializing in insurance regulatory compliance. 
-Your task is to EXTRACT ONLY the specific information from the financial statement document. 
-DO NOT calculate, validate, or derive any values - only extract what is explicitly stated.
+            if aggregated.get("solvency_ratio") is None and cap is not None and liab is not None:
+                if cap > 0 and liab > 0:
+                    # Solvency ratio = (Capital - Liabilities) / Liabilities * 100.
+                    aggregated["solvency_ratio"] = round(((float(cap) - float(liab)) / float(liab)) * 100, 2)
+                    logger.info("summarize_document: computed solvency_ratio: %s%%", aggregated["solvency_ratio"])
+        except Exception:
+            logger.debug("summarize_document: could not compute solvency_ratio", exc_info=True)
 
-DOCUMENT TEXT:
-{document_text}
 
-EXTRACTION REQUIREMENTS:
-
-**PILLAR 1: QUANTITATIVE & SOLVENCY DATA**
-Extract the following numerical values EXACTLY as reported (in KES or convert to KES if currency is specified):
-
-1. Available Solvency Margin (ASM) / Own Funds - The reported value of assets minus liabilities
-2. Required Solvency Margin (RSM) / Solvency Capital Requirement - Minimum required capital as stated
-3. Tier 1 Capital - Core capital as reported (common equity, retained earnings)
-4. Total Technical Provisions - Total reserves as stated
-5. Unearned Premium Reserves - Reserves for future coverage as reported
-6. Outstanding Claims Reserves - Reserves for unpaid claims as stated
-7. Reported Solvency Ratio - If explicitly stated as a percentage
-8. Earned Premium - Premium revenue as reported
-9. Incurred Losses - Total claims and claim expenses as stated
-10. Operating Expenses - Administrative costs as reported
-11. Reported Combined Ratio - If explicitly stated as a percentage
-
-**PILLAR 2: RISK & GOVERNANCE STATUS**
-Extract status information EXACTLY as stated:
-
-1. ORSA Report Status - Look for "Own Risk and Solvency Assessment" status mentions
-2. Fit & Proper Status - Key personnel compliance declarations
-3. Reinsurance Program Status - Reinsurance arrangements status
-
-**PILLAR 3: TRANSPARENCY & MARKET CONDUCT**
-Extract EXACTLY as reported:
-
-1. Claims Turnaround Time (TAT) - Average days/time to process claims if stated
-2. Complaint Ratio - Customer complaints ratio if reported
-3. Compliance Audit Status - Audit results or compliance status
-
-**IMPORTANT EXTRACTION RULES:**
-- Extract ONLY values that are explicitly stated in the document
-- Do NOT calculate or derive any ratios or percentages
-- Do NOT validate consistency between numbers
-- If a value is not found, mark as null
-- Include the exact terminology used in the document
-- Note any currency conversions applied
-
-**OUTPUT FORMAT:**
-Respond with a valid JSON object containing ONLY the extracted data:
-
-{{
-    "pillar_1": {{
-        "available_solvency_margin": <exact_number_or_null>,
-        "required_solvency_margin": <exact_number_or_null>,
-        "tier_1_capital": <exact_number_or_null>,
-        "total_technical_provisions": <exact_number_or_null>,
-        "unearned_premium_reserves": <exact_number_or_null>,
-        "outstanding_claims_reserves": <exact_number_or_null>,
-        "reported_solvency_ratio": <exact_percentage_or_null>,
-        "earned_premium": <exact_number_or_null>,
-        "incurred_losses": <exact_number_or_null>,
-        "operating_expenses": <exact_number_or_null>,
-        "reported_combined_ratio": <exact_percentage_or_null>
-    }},
-    "pillar_2": {{
-        "orsa_report_status": "<exact_status_or_null>",
-        "fit_and_proper_status": "<exact_status_or_null>",
-        "reinsurance_program_status": "<exact_status_or_null>"
-    }},
-    "pillar_3": {{
-        "claims_turnaround_time_days": <exact_number_or_null>,
-        "complaint_ratio": <exact_number_or_null>,
-        "compliance_audit_status": "<exact_status_or_null>"
-    }},
-    "extraction_metadata": {{
-        "confidence_score": <0-100>,
-        "currency_detected": "<currency_code>",
-        "period_covered": "<reporting_period_if_found>",
-        "extraction_notes": ["<terminology_variations_found>"],
-        "missing_data_items": ["<items_not_found_in_document>"]
-    }}
-}}
-
-Remember: Your role is EXTRACTION ONLY. Do not calculate, validate, or interpret the data.
-"""
-
-    def extract_financial_data(self, document_text: str) -> FinancialExtractionResult:
-        """Main method to extract financial data using GPT"""
-        try:
-            logger.info("🤖 Starting AI extraction process...")
-            
-            # Create extraction prompt
-            prompt = self.create_extraction_prompt(document_text)
-            
-            # Call GPT API
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a data extraction specialist. Extract ONLY the information explicitly stated in documents. Do not calculate, validate, or derive any values."
-                    },
-                    {
-                        "role": "user", 
-                        "content": prompt
-                    }
-                ],
-                temperature=0.1,  # Low temperature for consistency
-                max_tokens=2000,
-                response_format={"type": "json_object"}
-            )
-            
-            # Parse response
-            response_text = response.choices[0].message.content
-            logger.info(f"📤 GPT Response: {response_text[:200]}...")
-            
-            extracted_data = json.loads(response_text)
-            
-            # Convert to FinancialExtractionResult
-            result = self._convert_to_result_object(extracted_data)
-            
-            logger.info(f"✅ Extraction completed with {result.extraction_confidence}% confidence")
-            return result
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ JSON parsing error: {str(e)}")
-            return FinancialExtractionResult(missing_data_items=[f"JSON parsing error: {str(e)}"])
-            
-        except Exception as e:
-            logger.error(f"❌ AI extraction error: {str(e)}")
-            return FinancialExtractionResult(missing_data_items=[f"AI extraction error: {str(e)}"])
-    
-    def _convert_to_result_object(self, extracted_data: Dict[str, Any]) -> FinancialExtractionResult:
-        """Convert extracted JSON data to FinancialExtractionResult object"""
-        try:
-            pillar_1 = extracted_data.get('pillar_1', {})
-            pillar_2 = extracted_data.get('pillar_2', {})
-            pillar_3 = extracted_data.get('pillar_3', {})
-            metadata = extracted_data.get('extraction_metadata', {})
-            
-            return FinancialExtractionResult(
-                # Pillar 1 - Extracted values only
-                available_solvency_margin=pillar_1.get('available_solvency_margin'),
-                required_solvency_margin=pillar_1.get('required_solvency_margin'),
-                tier_1_capital=pillar_1.get('tier_1_capital'),
-                total_technical_provisions=pillar_1.get('total_technical_provisions'),
-                unearned_premium_reserves=pillar_1.get('unearned_premium_reserves'),
-                outstanding_claims_reserves=pillar_1.get('outstanding_claims_reserves'),
-                reported_solvency_ratio=pillar_1.get('reported_solvency_ratio'),
-                
-                # Pillar 2 - Status information only
-                orsa_report_status=pillar_2.get('orsa_report_status'),
-                fit_and_proper_status=pillar_2.get('fit_and_proper_status'),
-                reinsurance_program_status=pillar_2.get('reinsurance_program_status'),
-                
-                # Pillar 3 - Market conduct data only
-                claims_turnaround_time=pillar_3.get('claims_turnaround_time_days'),
-                reported_combined_ratio=pillar_3.get('reported_combined_ratio'),
-                complaint_ratio=pillar_3.get('complaint_ratio'),
-                compliance_audit_status=pillar_3.get('compliance_audit_status'),
-                
-                # Raw data for calculations elsewhere in the system
-                earned_premium=pillar_1.get('earned_premium'),
-                incurred_losses=pillar_1.get('incurred_losses'),
-                operating_expenses=pillar_1.get('operating_expenses'),
-                
-                # Extraction metadata
-                extraction_confidence=metadata.get('confidence_score', 0),
-                missing_data_items=metadata.get('missing_data_items', []),
-                extraction_notes=metadata.get('extraction_notes', [])
-            )
-            
-        except Exception as e:
-            logger.error(f"❌ Error converting extraction data: {str(e)}")
-            return FinancialExtractionResult(missing_data_items=[f"Data conversion error: {str(e)}"])
-    
-    def process_financial_statement(self, pdf_file) -> FinancialExtractionResult:
-        """Main public method to process a financial statement PDF"""
-        try:
-            logger.info("🚀 Starting financial statement processing...")
-            
-            # Extract text from PDF
-            document_text = self.extract_text_from_pdf(pdf_file)
-            
-            if not document_text.strip():
-                return FinancialExtractionResult(missing_data_items=["Could not extract text from PDF"])
-            
-            # Extract financial data using AI - NO CALCULATIONS OR VALIDATION
-            result = self.extract_financial_data(document_text)
-            
-            logger.info("✅ Financial statement processing completed")
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ Error processing financial statement: {str(e)}")
-            return FinancialExtractionResult(missing_data_items=[f"Processing error: {str(e)}"])
-
-# Factory function to create AI assistant instance
-def create_ai_assistant(api_key: Optional[str] = None) -> FinancialStatementAI:
-    """Create and return a FinancialStatementAI instance"""
-    return FinancialStatementAI(api_key)
-
-# Example usage function
-def test_ai_extraction():
-    """Test function for development purposes"""
-    try:
-        ai_assistant = create_ai_assistant()
-        
-        # Test with sample text
-        sample_text = """
-        Financial Statement Extract:
-        Available Own Funds: KES 500,000,000
-        Solvency Capital Requirement: KES 400,000,000
-        Tier 1 Capital: KES 450,000,000
-        Technical Provisions: KES 300,000,000
-        Solvency Ratio: 125%
-        Claims Processing Time: Average 25 days
-        Combined Ratio: 95%
-        ORSA Report: Completed and approved by Board
-        """
-        
-        result = ai_assistant.extract_financial_data(sample_text)
-        
-        print("🧪 Test Results (EXTRACTION ONLY):")
-        print(f"Available Solvency Margin: KES {result.available_solvency_margin:,}" if result.available_solvency_margin else "ASM: Not found")
-        print(f"Required Solvency Margin: KES {result.required_solvency_margin:,}" if result.required_solvency_margin else "RSM: Not found")
-        print(f"Reported Solvency Ratio: {result.reported_solvency_ratio}%" if result.reported_solvency_ratio else "Solvency Ratio: Not reported")
-        print(f"Claims TAT: {result.claims_turnaround_time} days" if result.claims_turnaround_time else "Claims TAT: Not found")
-        print(f"ORSA Status: {result.orsa_report_status}" if result.orsa_report_status else "ORSA: Not found")
-        print(f"Confidence: {result.extraction_confidence}%")
-        print(f"Missing Items: {result.missing_data_items}")
-        
-    except ValueError as e:
-        print(f"❌ Configuration Error: {str(e)}")
-        print("Please ensure OPENAI_API_KEY is set in your .env file")
-    except Exception as e:
-        print(f"❌ Test Error: {str(e)}")
-
-if __name__ == "__main__":
-    test_ai_extraction()
+        # Simple check for missing expected keys
+        summary.raw_chunk_summaries = raw_chunk_summaries
+        summary.metrics = aggregated
+        # Recalculate missing items based on final aggregated metrics
+        summary.missing_items = [k for k in expected_keys if aggregated.get(k) is None or aggregated.get(k) == '']
+        summary.narrative = ""
+        summary.confidence = None
+        logger.info("summarize_document: extracted metrics: %s", aggregated)
+        logger.info("summarize_document: missing items: %s", summary.missing_items)
+        return summary

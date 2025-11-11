@@ -44,7 +44,7 @@ export function InsurerDashboardPage() {
 
   // ✅ REVERT: Use the original working endpoint
   const fetchSubmissionHistory = useCallback(async () => {
-    try {
+     try {
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
       const userId = currentUser.id;
       
@@ -59,37 +59,41 @@ export function InsurerDashboardPage() {
       const response = await fetch(`http://localhost:5000/api/submissions/user/${userId}`);
       
       if (response.ok) {
-        const data = await response.json();
-        console.log('📊 Fetched user submission history:', data);
-        
-        // ✅ HANDLE: The actual API response format
-        if (data.success && data.submissions) {
-          const submissions = data.submissions.map((submission: any) => ({
-            ...submission,
-            // Ensure compatibility with existing code
-            submission_date: submission.submission_date || submission.created_at,
-            status: submission.status // Already in correct format
-          }));
-          
-          setSubmissionHistory(submissions);
-          
-          // Log approved submissions specifically
-          const approvedSubmissions = submissions.filter((s: any) => s.status === 'REGULATOR_APPROVED');
-          console.log(`✅ Found ${approvedSubmissions.length} approved submissions`);
-          
-        } else {
-          console.log('No submissions found in response');
-          setSubmissionHistory([]);
-        }
-      } else {
-        console.log('No submission history found or endpoint not available');
-        setSubmissionHistory([]);
-      }
-    } catch (error) {
-      console.error('Error fetching history:', error);
-      setSubmissionHistory([]);
-    }
-  }, []);
+const data = await response.json();
+console.log('📊 Fetched user submission history:', data);
+
+const normalizeStatus = (s: any) => {
+  if (!s && s !== '') return null;
+  const up = String(s).toUpperCase();
+  if (up.includes('REJECT')) return 'REGULATOR_REJECTED';
+  if (up.includes('APPROV')) return 'REGULATOR_APPROVED';
+  if (up.includes('INSURER') || up.includes('SUBMIT')) return 'INSURER_SUBMITTED';
+  return up;
+};
+
+// ✅ HANDLE: The actual API response format (normalize statuses)
+if (data.success && data.submissions) {
+  const submissions = data.submissions.map((submission: any) => ({
+    ...submission,
+    submission_date: submission.submission_date || submission.created_at,
+    status: normalizeStatus(submission.status)
+  }));
+ 
+           setSubmissionHistory(submissions);
+           console.log(`✅ Found ${submissions.filter((s:any)=>s.status==='REGULATOR_APPROVED').length} approved submissions and ${submissions.filter((s:any)=>s.status==='REGULATOR_REJECTED').length} rejected submissions`);
+         } else {
+           console.log('No submissions found in response');
+           setSubmissionHistory([]);
+         }
+       } else {
+         console.log('No submission history found or endpoint not available');
+         setSubmissionHistory([]);
+       }
+     } catch (error) {
+       console.error('Error fetching history:', error);
+       setSubmissionHistory([]);
+     }
+   }, []);
 
   useEffect(() => {
     fetchSubmissionHistory();
@@ -113,27 +117,39 @@ export function InsurerDashboardPage() {
 
   const complianceDistribution = filteredSubmissions.reduce((acc, s: any) => {
     if (s.status === 'REGULATOR_APPROVED') acc[0].value += 1;
-    else if (s.status === 'REJECTED') acc[1].value += 1;
-    else acc[2].value += 1; // Pending
-    return acc;
-  }, [
-    { name: 'Approved', value: 0, color: COLORS.compliant },
-    { name: 'Rejected', value: 0, color: COLORS.nonCompliant },
-    { name: 'Pending', value: 0, color: COLORS.pending },
-  ]);
+    else if (s.status === 'REGULATOR_REJECTED') acc[1].value += 1;
+     else acc[2].value += 1; // Pending
+     return acc;
+   }, [
+     { name: 'Approved', value: 0, color: COLORS.compliant },
+     { name: 'Rejected', value: 0, color: COLORS.nonCompliant },
+     { name: 'Pending', value: 0, color: COLORS.pending },
+   ]);
 
   const averageSolvencyRatio = filteredSubmissions.length > 0
     ? filteredSubmissions.reduce((sum, s: any) => sum + (s.solvency_ratio || 0), 0) / filteredSubmissions.length
     : 0;
 
-  // ✅ FIXED: Get latest approved status with the correct API format
-  const userLatestStatus = submissionHistory.length > 0 
-    ? submissionHistory
-        .filter((s: any) => s.status === 'REGULATOR_APPROVED' && s.regulator_approved_at)
-        .sort((a: any, b: any) => new Date(b.regulator_approved_at).getTime() - new Date(a.regulator_approved_at).getTime())[0]
-    : null;
+  // Compute the latest regulator decision (approved or rejected)
+  const userLatestStatus = (() => {
+    if (!submissionHistory || submissionHistory.length === 0) return null;
 
-  console.log('📊 Latest approved status:', userLatestStatus);
+    const withAction = submissionHistory
+      .map((s: any) => {
+        const approvedAt = s.regulator_approved_at ? new Date(s.regulator_approved_at) : null;
+        const rejectedAt = s.regulator_rejected_at ? new Date(s.regulator_rejected_at) : null;
+        const actionDate =
+          approvedAt && rejectedAt ? (approvedAt > rejectedAt ? approvedAt : rejectedAt) : (approvedAt || rejectedAt);
+        return { ...s, _actionDate: actionDate };
+      })
+      .filter((s: any) => s._actionDate);
+
+    if (withAction.length === 0) return null;
+    withAction.sort((a: any, b: any) => (b._actionDate as Date).getTime() - (a._actionDate as Date).getTime());
+    return withAction[0];
+  })();
+
+  console.log('📊 Latest regulator decision:', userLatestStatus);
 
   const handleExport = () => {
     if (chartData.length === 0) {
@@ -290,56 +306,68 @@ export function InsurerDashboardPage() {
         </div>
       </div>
 
-      {/* ✅ ADD: Show approved submissions prominently */}
+      {/* Show latest regulator decision (approved or rejected) */}
       {userLatestStatus && (
-        <Card className="border-green-200 bg-gradient-to-r from-green-50 to-emerald-50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-green-800">
-              <FaCheck className="h-5 w-5" />
-              Latest Regulatory Approval
-              <Badge variant="secondary" className="bg-green-100 text-green-800">
-                Approved
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <div className="text-sm font-medium text-green-800">
-                  Transaction #{userLatestStatus.id}
-                </div>
-                <div className="text-sm text-green-700">
-                  Approved: {format(new Date(userLatestStatus.regulator_approved_at), 'PPP pp')}
-                </div>
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <span className="text-gray-500">Capital:</span>
-                    <div className="font-medium text-green-700">KES {userLatestStatus.capital?.toLocaleString()}</div>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Liabilities:</span>
-                    <div className="font-medium text-red-600">KES {userLatestStatus.liabilities?.toLocaleString()}</div>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Solvency:</span>
-                    <div className="font-medium text-blue-700">{userLatestStatus.solvency_ratio}%</div>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                {userLatestStatus.regulator_comments && (
-                  <div>
-                    <div className="text-xs font-medium text-gray-700 mb-1">Regulator Comments:</div>
-                    <div className="text-sm bg-white p-2 rounded border text-gray-700">
-                      {userLatestStatus.regulator_comments}
+        (() => {
+          const isApproved = Boolean(userLatestStatus.regulator_approved_at);
+          const isRejected = Boolean(userLatestStatus.regulator_rejected_at);
+          const cardClass = isApproved
+            ? 'border-green-200 bg-gradient-to-r from-green-50 to-emerald-50'
+            : isRejected
+            ? 'border-red-200 bg-gradient-to-r from-red-50 to-rose-50'
+            : 'border-gray-200 bg-gray-50';
+          const badgeText = isApproved ? 'Approved' : isRejected ? 'Rejected' : 'Decision';
+          const badgeClass = isApproved ? 'bg-green-100 text-green-800' : isRejected ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800';
+          const actionDate = userLatestStatus.regulator_approved_at || userLatestStatus.regulator_rejected_at;
+
+          return (
+            <Card className={cardClass}>
+              <CardHeader>
+                <CardTitle className={`flex items-center gap-2 ${isApproved ? 'text-green-800' : isRejected ? 'text-red-800' : ''}`}>
+                  {isApproved ? <FaCheck className="h-5 w-5" /> : isRejected ? <FaTimes className="h-5 w-5" /> : <FaChartBar className="h-5 w-5" />}
+                  Latest Regulatory Decision
+                  <Badge variant="secondary" className={badgeClass}>
+                    {badgeText}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className={`space-y-2 ${isApproved ? 'text-green-800' : isRejected ? 'text-red-800' : ''}`}>
+                    <div className="text-sm font-medium">Transaction #{userLatestStatus.id}</div>
+                    <div className="text-sm">
+                      {isApproved ? 'Approved:' : isRejected ? 'Rejected:' : 'Decision:'} {actionDate ? format(new Date(actionDate), 'PPP pp') : '—'}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <span className="text-gray-500">Capital:</span>
+                        <div className="font-medium">KES {userLatestStatus.capital?.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Liabilities:</span>
+                        <div className="font-medium">KES {userLatestStatus.liabilities?.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Solvency:</span>
+                        <div className="font-medium">{userLatestStatus.solvency_ratio}%</div>
+                      </div>
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+                  <div className="space-y-2">
+                    {userLatestStatus.regulator_comments && (
+                      <div>
+                        <div className="text-xs font-medium text-gray-700 mb-1">Regulator Comments:</div>
+                        <div className="text-sm bg-white p-2 rounded border text-gray-700">
+                          {userLatestStatus.regulator_comments}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()
       )}
 
       {/* Stats Cards */}
@@ -386,11 +414,11 @@ export function InsurerDashboardPage() {
                         <span className="font-medium">Transaction #{submission.id}</span>
                         <Badge className={
                           submission.status === 'REGULATOR_APPROVED' ? 'bg-green-100 text-green-800' :
-                          submission.status === 'REJECTED' ? 'bg-red-100 text-red-800' :
+                          submission.status === 'REGULATOR_REJECTED' ? 'bg-red-100 text-red-800' :
                           'bg-yellow-100 text-yellow-800'
                         }>
                           {submission.status === 'REGULATOR_APPROVED' ? 'Approved' :
-                           submission.status === 'REJECTED' ? 'Rejected' : 'Pending'}
+                           submission.status === 'REGULATOR_REJECTED' ? 'Rejected' : 'Pending'}
                         </Badge>
                       </div>
                       
@@ -428,7 +456,7 @@ export function InsurerDashboardPage() {
                       )}
                       
                       {/* ✅ SHOW REJECTION DETAILS */}
-                      {submission.status === 'REJECTED' && submission.regulator_rejected_at && (
+                      {submission.status === 'REGULATOR_REJECTED' && submission.regulator_rejected_at && (
                         <div className="mt-2 p-2 bg-red-50 rounded border border-red-200">
                           <div className="text-xs font-medium text-red-800">
                             ❌ Rejected: {format(new Date(submission.regulator_rejected_at), 'PPP pp')}

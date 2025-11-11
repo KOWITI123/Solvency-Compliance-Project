@@ -1,0 +1,18 @@
+{
+  "document_title": "CIC_Financial_Accounts_2022_Summary.pdf",
+  "narrative": "",
+  "metrics": {
+    "capital": 2615578.0,
+    "liabilities": 1210502.0,
+    "investment_income": 2055237.0,
+    "profit_before_tax": 2030169.0,
+    "contingency_reserve": 1441433.0,
+    "solvency_ratio": 216.07
+  },
+  "recommendations": [],
+  "missing_items": [],
+  "confidence": null,
+  "raw_chunk_summaries": [
+    "{\"title\": \"CIC Insurance Group PLC - Financial Accounts\", \"key_numbers\": {\"Capital\": 2615578.0, \"Liabilities\": 1210502.0, \"Investment Income\": 2055237.0, \"Profit Before Tax\": 2030169.0, \"Contingency Reserve\": 1441433.0}, \"notes\": [], \"missing_items\": []}"
+  ]
+}

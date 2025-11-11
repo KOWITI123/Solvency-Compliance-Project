@@ -12,6 +12,11 @@ import sys
 import re
 import os
 from werkzeug.utils import secure_filename
+from sqlalchemy import select  # add near other imports
+import sqlalchemy as sa
+
+# NEW: import AI agent
+from ai_assistant import GPTComplianceAgent
 
 def register_submission_routes(app):
     print("🔧 DEBUG: register_submission_routes() function called")
@@ -26,7 +31,10 @@ def register_submission_routes(app):
             uploaded_file = None
             saved_filename = None
             saved_file_relpath = None
-            
+            ai_extraction = None
+            ai_agent = None
+            ai_metrics = {}
+
             # Handle both JSON and form data
             if request.content_type == 'application/json':
                 print("📊 Processing JSON request...")
@@ -80,7 +88,29 @@ def register_submission_routes(app):
                     # store relative path (uploads/... relative to backend/)
                     saved_file_relpath = os.path.relpath(save_path, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
                     print(f"✅ Uploaded file saved to: {save_path}")
-            
+
+                    # NEW: Run AI extraction on the saved PDF
+                    try:
+                        print("🤖 Running AI extraction on uploaded document...")
+                        ai_agent = GPTComplianceAgent()  # lightweight init
+                        with open(save_path, "rb") as fh:
+                            pdf_bytes = fh.read()
+                        summary = ai_agent.summarize_document(pdf_bytes, document_title=filename)
+                        # summary.metrics is a dict of canonical keys
+                        if isinstance(summary, dict):
+                            ai_metrics = summary.get("metrics", {}) or {}
+                        else:
+                            ai_metrics = getattr(summary, "metrics", {}) or {}
+                        ai_extraction = {
+                            "metrics": ai_metrics,
+                            "raw_chunk_summaries": getattr(summary, "raw_chunk_summaries", None)
+                        }
+                        print("🤖 AI extraction complete. Keys:", list(ai_metrics.keys()))
+                    except Exception as ai_e:
+                        print("⚠️ AI extraction failed:", ai_e)
+                        ai_extraction = None
+                        ai_metrics = {}
+                
             else:
                 return jsonify({
                     'success': False,
@@ -96,9 +126,6 @@ def register_submission_routes(app):
                     'error': 'Missing required field: insurer_id'
                 }), 400
 
-            # AI functionality removed: uploaded files are stored for manual regulator review.
-            # No AI extraction or AI initialization will be attempted.
-            
             # Validate final data
             print(f"🔍 Validating final data:")
             print(f"   insurer_id: {data.get('insurer_id')}")
@@ -115,11 +142,53 @@ def register_submission_routes(app):
                     'error': 'Invalid or missing insurer_id'
                 }), 400
             
-            # Convert financial values
+            # Convert financial values (manual or AI fill-ins)
             try:
-                capital = parse_human_number(data.get('capital')) or 0
-                liabilities = parse_human_number(data.get('liabilities')) or 0
-                # parse new manual numeric fields (optional)
+                # Prefer explicit manual values first; otherwise use AI metrics if available
+                raw_cap = data.get('capital')
+                if raw_cap:
+                    capital = parse_human_number(raw_cap) or 0
+                else:
+                    capital = None
+                raw_liab = data.get('liabilities')
+                if raw_liab:
+                    liabilities = parse_human_number(raw_liab) or 0
+                else:
+                    liabilities = None
+
+                # If AI metrics present, fill missing values
+                if ai_metrics:
+                    if (capital is None or capital == 0) and ai_metrics.get('capital') not in (None, 0):
+                        capital = float(ai_metrics.get('capital'))
+                    if (liabilities is None or liabilities == 0) and ai_metrics.get('liabilities') not in (None, 0):
+                        liabilities = float(ai_metrics.get('liabilities'))
+                    # other optional fields
+                    if ai_metrics.get('gwp') not in (None, '') and not data.get('gwp'):
+                        data['gwp'] = ai_metrics.get('gwp')
+                    if ai_metrics.get('net_claims_paid') not in (None, '') and not data.get('net_claims_paid'):
+                        data['net_claims_paid'] = ai_metrics.get('net_claims_paid')
+                    if ai_metrics.get('investment_income_total') not in (None, '') and not data.get('investment_income_total'):
+                        data['investment_income_total'] = ai_metrics.get('investment_income_total')
+                    if ai_metrics.get('commission_expense_total') not in (None, '') and not data.get('commission_expense_total'):
+                        data['commission_expense_total'] = ai_metrics.get('commission_expense_total')
+                    if ai_metrics.get('operating_expenses_total') not in (None, '') and not data.get('operating_expenses_total'):
+                        data['operating_expenses_total'] = ai_metrics.get('operating_expenses_total')
+                    if ai_metrics.get('profit_before_tax') not in (None, '') and not data.get('profit_before_tax'):
+                        data['profit_before_tax'] = ai_metrics.get('profit_before_tax')
+                    if ai_metrics.get('contingency_reserve_statutory') not in (None, '') and not data.get('contingency_reserve_statutory'):
+                        data['contingency_reserve_statutory'] = ai_metrics.get('contingency_reserve_statutory')
+                    if ai_metrics.get('ibnr_reserve_gross') not in (None, '') and not data.get('ibnr_reserve_gross'):
+                        data['ibnr_reserve_gross'] = ai_metrics.get('ibnr_reserve_gross')
+                    if ai_metrics.get('related_party_net_exposure') not in (None, '') and not data.get('related_party_net_exposure'):
+                        data['related_party_net_exposure'] = ai_metrics.get('related_party_net_exposure')
+                    if ai_metrics.get('auditors_unqualified_opinion') is not None and data.get('auditors_unqualified_opinion') in (None, ''):
+                        data['auditors_unqualified_opinion'] = ai_metrics.get('auditors_unqualified_opinion')
+
+                # final fallback: ensure numeric defaults
+                capital = float(capital) if capital not in (None, '') else 0
+                liabilities = float(liabilities) if liabilities not in (None, '') else 0
+
+                # parse new numeric fields (manual or AI-supplied)
                 gwp = parse_human_number(data.get('gwp')) if data.get('gwp') else None
                 net_claims_paid = parse_human_number(data.get('net_claims_paid')) if data.get('net_claims_paid') else None
                 investment_income_total = parse_human_number(data.get('investment_income_total')) if data.get('investment_income_total') else None
@@ -129,6 +198,7 @@ def register_submission_routes(app):
                 contingency_reserve_statutory = parse_human_number(data.get('contingency_reserve_statutory')) if data.get('contingency_reserve_statutory') else None
                 ibnr_reserve_gross = parse_human_number(data.get('ibnr_reserve_gross')) if data.get('ibnr_reserve_gross') else None
                 related_party_net_exposure = parse_human_number(data.get('related_party_net_exposure')) if data.get('related_party_net_exposure') else None
+
                 # textual / boolean fields
                 irfs17_implementation_status = data.get('irfs17_implementation_status')
                 claims_development_method = data.get('claims_development_method')
@@ -218,6 +288,14 @@ def register_submission_routes(app):
                 submission.claims_development_method = claims_development_method
                 submission.auditors_unqualified_opinion = auditors_unqualified_opinion
 
+                # Attach AI metadata if available
+                if ai_extraction is not None:
+                    submission.ai_extraction = ai_extraction.get('metrics') if isinstance(ai_extraction, dict) else None
+                    submission.ai_extraction_raw = json.dumps(ai_extraction.get('raw_chunk_summaries')) if isinstance(ai_extraction, dict) and ai_extraction.get('raw_chunk_summaries') else None
+                    submission.ai_model = getattr(ai_agent, 'model_name', None) or None
+                    submission.ai_used = True if ai_extraction else False
+                    submission.ai_extracted_at = datetime.utcnow()
+
                 db.session.add(submission)
                 db.session.commit()
                 
@@ -243,7 +321,7 @@ def register_submission_routes(app):
                  'liabilities': liabilities,
                  'solvency_ratio': round(solvency_ratio, 2),
                  'submission_date': parsed_date.isoformat(),
-                 'ai_extraction': None,
+                 'ai_extraction': ai_extraction,
                  'financial_statement_path': saved_file_relpath,
                  'financial_statement_filename': submission.financial_statement_filename
              }
@@ -267,25 +345,116 @@ def register_submission_routes(app):
         """Get all submissions for a specific user"""
         try:
             print(f"📊 Getting submissions for user: {user_id}")
-            
-            # Mock data for now
-            mock_submissions = [
-                {
-                    'id': 1,
-                    'capital': 1000000,
-                    'liabilities': 800000,
-                    'solvency_ratio': 25.0,
-                    'status': 'INSURER_SUBMITTED',
-                    'submission_date': '2024-01-15',
-                    'created_at': '2024-01-15T10:00:00Z'
-                }
+
+            # Use a column-level select to avoid ORM Enum coercion on load
+            tbl = DataSubmission.__table__
+            # build column list defensively so missing DB columns don't raise KeyError
+            cols = [
+                tbl.c.id,
+                tbl.c.capital,
+                tbl.c.liabilities,
+                tbl.c.solvency_ratio,
+                # cast status to plain text to avoid SQLAlchemy Enum coercion/validation
+                sa.cast(tbl.c.status, sa.String).label('status'),
+                tbl.c.submission_date,
+                tbl.c.created_at,
+                tbl.c.financial_statement_filename,
             ]
-            
-            return jsonify({
-                'success': True,
-                'submissions': mock_submissions
-            }), 200
-            
+
+            optional_cols = ['regulator_approved_at', 'regulator_rejected_at', 'regulator_comments', 'ai_extraction']
+            tbl_keys = set(tbl.c.keys())
+            for oc in optional_cols:
+                if oc in tbl_keys:
+                    cols.append(tbl.c[oc])
+
+            stmt = select(*cols).where(tbl.c.insurer_id == user_id).order_by(tbl.c.created_at.desc())
+
+            res = db.session.execute(stmt).all()
+            out = []
+            for row in res:
+                # row is a sqlalchemy.engine.Row; access by column name
+                status_raw = row.status
+                # Normalize status to canonical frontend-friendly string used by UI
+                # Accept DB enum labels like 'REJECTED' / 'APPROVED' and map them to the frontend constants.
+                try:
+                    if status_raw is None:
+                        status_str = None
+                    else:
+                        sr = str(status_raw).strip()
+                        up = sr.upper()
+                        # direct canonical forms (pass-through)
+                        if up in ("REGULATOR_REJECTED", "REGULATOR_APPROVED", "INSURER_SUBMITTED", "INSURER_SUB"):
+                            # normalize slight variants
+                            if up == "INSURER_SUB":
+                                status_str = "INSURER_SUBMITTED"
+                            else:
+                                status_str = up
+                        else:
+                            # map common DB labels/legacy values to canonical frontend names
+                            if "REJECT" in up:
+                                status_str = "REGULATOR_REJECTED"
+                            elif "APPROVE" in up or "APPROVED" in up:
+                                status_str = "REGULATOR_APPROVED"
+                            elif "INSURER" in up or "SUBMIT" in up:
+                                status_str = "INSURER_SUBMITTED"
+                            else:
+                                # fallback to the raw string
+                                status_str = up
+                except Exception:
+                    status_str = str(status_raw)
+
+                # normalize ai_extraction (may be JSON string or JSON/JSONB type)
+                ai_payload = None
+                try:
+                    raw_ai = row.ai_extraction
+                    if isinstance(raw_ai, (dict, list)):
+                        ai_payload = raw_ai
+                    elif isinstance(raw_ai, str) and raw_ai.strip():
+                        ai_payload = json.loads(raw_ai)
+                    else:
+                        ai_payload = raw_ai
+                except Exception:
+                    ai_payload = row.ai_extraction
+
+                out.append({
+                    'id': int(row.id) if row.id is not None else None,
+                    'capital': float(row.capital) if row.capital is not None else None,
+                    'liabilities': float(row.liabilities) if row.liabilities is not None else None,
+                    'solvency_ratio': float(row.solvency_ratio) if row.solvency_ratio is not None else None,
+                    'status': status_str,
+                    'submission_date': row.submission_date.isoformat() if getattr(row, 'submission_date', None) else (row.created_at.isoformat() if getattr(row, 'created_at', None) else None),
+                    'created_at': row.created_at.isoformat() if getattr(row, 'created_at', None) else None,
+                    'financial_statement_filename': row.financial_statement_filename,
+                    'regulator_approved_at': row.regulator_approved_at.isoformat() if getattr(row, 'regulator_approved_at', None) else None,
+                    'regulator_rejected_at': row.regulator_rejected_at.isoformat() if getattr(row, 'regulator_rejected_at', None) else None,
+                    'regulator_comments': row.regulator_comments,
+                    'ai_extraction': ai_payload
+                })
+
+            # DEBUG: summary of serialized results to help diagnose missing rejections in the insurer UI
+            try:
+                print(f"📣 Serialized {len(out)} submissions for user {user_id}")
+                stats = {}
+                rejected_list = []
+                for s in out:
+                    st = s.get('status') or 'UNKNOWN'
+                    stats[st] = stats.get(st, 0) + 1
+                    if 'REJECT' in (st or '').upper():
+                        rejected_list.append({
+                            'id': s.get('id'),
+                            'regulator_rejected_at': s.get('regulator_rejected_at'),
+                            'regulator_comments': s.get('regulator_comments')
+                        })
+                print("📊 Status counts:", stats)
+                if rejected_list:
+                    print("🛑 Rejected submissions present:", rejected_list)
+                else:
+                    print("ℹ️ No rejected submissions found in query results")
+            except Exception as dbg_e:
+                print("⚠️ Debug logging failed while summarizing submissions:", dbg_e)
+ 
+            return jsonify({'success': True, 'submissions': out}), 200
+             
         except Exception as e:
             print(f"❌ Error getting user submissions: {str(e)}")
             return jsonify({

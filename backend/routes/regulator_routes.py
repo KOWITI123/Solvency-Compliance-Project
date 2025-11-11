@@ -1,19 +1,16 @@
 from flask import request, jsonify, send_from_directory, url_for, current_app
+from database.models import db, DataSubmission, SubmissionStatus
 from datetime import datetime
-from database.db_connection import db
-<<<<<<< HEAD
-from database.models import DataSubmission, SubmissionStatus, Notification, User
+import json
+# use the project's local database.models import (the correct import is below)
 from sqlalchemy import cast, String
 import sqlalchemy as sa
-=======
 from database.models import (
     DataSubmission, SubmissionStatus, Notification, 
     MaterialRisk, StressTest, RiskAppetiteStatement, 
     KeyFunctionHolder, BoardMeeting, InternalControl, ORSAReport,
     RiskType, RiskLevel, StressTestStatus, GovernanceRole
 )
->>>>>>> 86c77f4 (added ai agent)
-import json
 import os
 import time
 from ai_assistant import GPTComplianceAgent
@@ -224,114 +221,249 @@ def register_regulator_routes(app):
             import traceback; traceback.print_exc()
             return jsonify({'success': False, 'error': str(e)}), 500
 
-    @app.route('/api/regulator/approve-submission', methods=['POST', 'OPTIONS'])
-    def regulator_approve_submission():
-        # Handle CORS preflight
-        if request.method == 'OPTIONS':
-            return '', 200
-            
+    def _resolve_submission_status_member(preferred_name: str):
+        """Return a SubmissionStatus enum member that best matches preferred_name, or None."""
+        if not preferred_name:
+            return None
+
+        name_up = preferred_name.strip().upper()
+
+        # 1) direct attribute
+        if hasattr(SubmissionStatus, name_up):
+            return getattr(SubmissionStatus, name_up)
+
+        # 2) try matching by name or value substring
         try:
-            print("🟢 Regulator APPROVAL request received")
-            data = request.get_json()
-            print(f"📦 Approval data: {data}")
-            
-            submission_id = data.get('submission_id')
-            regulator_comments = data.get('comments', '')
-            
-            if not submission_id:
-                return jsonify({'success': False, 'error': 'submission_id is required'}), 400
-            
-            # Find the submission
-            submission = DataSubmission.query.get(submission_id)
-            if not submission:
-                return jsonify({'success': False, 'error': 'Submission not found'}), 404
-            
-            if submission.status != SubmissionStatus.INSURER_SUBMITTED:
-                return jsonify({
-                    'success': False, 
-                    'error': f'Submission is not in pending status. Current status: {submission.status.value}'
-                }), 400
-            
-            # ✅ CALCULATE SOLVENCY RATIO DURING APPROVAL
-            solvency_ratio = (submission.capital / submission.liabilities) * 100 if submission.liabilities > 0 else 0
-            
-            # Update submission status to APPROVED
-            submission.status = SubmissionStatus.REGULATOR_APPROVED
-            submission.solvency_ratio = solvency_ratio  # ✅ Calculate ONLY during approval
-            submission.regulator_approved_at = datetime.utcnow()
-            submission.regulator_comments = regulator_comments
-            
+            for member in SubmissionStatus:
+                try:
+                    if name_up == member.name.upper():
+                        return member
+                    if name_up == str(member.value).upper():
+                        return member
+                    if name_up in member.name.upper() or name_up in str(member.value).upper():
+                        return member
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # 3) common legacy mappings
+        legacy_map = {
+            "REJECTED": ["REJECTED", "REGULATOR_REJECTED", "REGULATOR_REJECT"],
+            "APPROVED": ["APPROVED", "REGULATOR_APPROVED", "REGULATOR_APPROVE"],
+            "INSURER_SUBMITTED": ["INSURER_SUB", "INSURER_SUBMITTED"]
+        }
+        for canonical, aliases in legacy_map.items():
+            if any(a == name_up or a in name_up for a in aliases):
+                if hasattr(SubmissionStatus, canonical):
+                    return getattr(SubmissionStatus, canonical)
+
+        # 4) fuzzy fallback: match by keyword contained in enum member name
+        try:
+            keywords = []
+            if "REJECT" in name_up:
+                keywords = ["REJECT"]
+            elif "APPROVE" in name_up or "APPROVED" in name_up:
+                keywords = ["APPROVE"]
+            elif "INSURER" in name_up or "SUBMIT" in name_up:
+                keywords = ["INSURER", "SUBMIT"]
+
+            if keywords:
+                for member in SubmissionStatus:
+                    mn = member.name.upper()
+                    for kw in keywords:
+                        if kw in mn:
+                            return member
+        except Exception:
+            pass
+
+        # 5) no match found
+        return None
+
+    def _set_status_and_commit(submission, status_name: str, comment: str | None):
+        """Set status (prefer enum member) and commit. Use DB-enum fallback if direct assignment fails."""
+        member = _resolve_submission_status_member(status_name)
+        if member is None:
+            raise RuntimeError(
+                f"No matching SubmissionStatus enum member found for requested status '{status_name}'. "
+                "Either map to an existing enum member or add the value to the DB enum (migration required). "
+                f"Available members: {[m.name for m in SubmissionStatus]}"
+            )
+
+        now = datetime.utcnow()
+        # First try to assign the python enum member (preferred)
+        try:
+            submission.status = member
+            if member.name.upper().endswith("APPROVED"):
+                submission.regulator_approved_at = now
+            if member.name.upper().endswith("REJECTED"):
+                submission.regulator_rejected_at = now
+            submission.regulator_comments = comment
+            db.session.add(submission)
             db.session.commit()
-            
-            print(f"✅ Submission {submission_id} APPROVED with solvency ratio: {solvency_ratio:.2f}%")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Submission approved successfully',
-                'submission_id': submission_id,
-                'status': 'REGULATOR_APPROVED',
-                'solvency_ratio': solvency_ratio,
-                'approved_at': submission.regulator_approved_at.isoformat()  # ✅ FIXED: Use correct field name
-            }), 200
-            
+
+            # create a simple Notification for the insurer so their UI can refresh/show the change
+            try:
+                recipient = getattr(submission, "insurer_id", None)
+                if not recipient:
+                    # try related object fallback
+                    insurer_obj = getattr(submission, "insurer", None)
+                    recipient = getattr(insurer_obj, "id", None) if insurer_obj is not None else None
+
+                if recipient:
+                    n = Notification()
+                    try:
+                        n.recipient_id = recipient
+                    except Exception:
+                        pass
+                    try:
+                        action = "approved" if member.name.upper().endswith("APPROVED") else "rejected"
+                        n.message = f"Your submission {getattr(submission, 'id', '')} was {action} by the regulator."
+                    except Exception:
+                        n.message = f"Submission {getattr(submission, 'id', '')} status updated"
+                    # optional fields (defensive)
+                    try: n.sender_id = None
+                    except Exception: pass
+                    try: n.urgency = "high"
+                    except Exception: pass
+                    try: n.status = "UNREAD"
+                    except Exception: pass
+                    try: n.sent_at = now
+                    except Exception: pass
+
+                    db.session.add(n)
+                    db.session.commit()
+            except Exception:
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
+
+            return
+        except Exception as first_err:
+            # commit/assignment failed (likely DB enum mismatch). Rollback and try a fallback using existing DB enum labels.
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
+            labels = _get_db_enum_labels('submissionstatus')
+            # pick keyword from requested member
+            key = None
+            mn = member.name.upper()
+            if 'REJECT' in mn:
+                key = 'REJECT'
+            elif 'APPROVE' in mn:
+                key = 'APPROVE'
+            elif 'INSURER' in mn or 'SUBMIT' in mn:
+                key = 'SUBMIT'
+
+            chosen_label = None
+            if key and labels:
+                for lab in labels:
+                    if key in lab.upper():
+                        chosen_label = lab
+                        break
+
+            if chosen_label:
+                try:
+                    # assign existing DB label (string) which Postgres enum accepts
+                    submission.status = chosen_label
+                    if 'APPROVE' in chosen_label.upper():
+                        submission.regulator_approved_at = now
+                    if 'REJECT' in chosen_label.upper():
+                        submission.regulator_rejected_at = now
+                    submission.regulator_comments = comment
+                    db.session.add(submission)
+                    db.session.commit()
+                    current_app.logger.info(f"✅ Fallback: assigned DB enum label '{chosen_label}' for status '{status_name}'")
+
+                    # create notification for insurer (fallback path)
+                    try:
+                        recipient = getattr(submission, "insurer_id", None)
+                        if not recipient:
+                            insurer_obj = getattr(submission, "insurer", None)
+                            recipient = getattr(insurer_obj, "id", None) if insurer_obj is not None else None
+
+                        if recipient:
+                            n = Notification()
+                            try: n.recipient_id = recipient
+                            except Exception: pass
+                            try:
+                                action = "approved" if "APPROVE" in chosen_label.upper() else "rejected"
+                                n.message = f"Your submission {getattr(submission, 'id', '')} was {action} by the regulator."
+                            except Exception:
+                                n.message = f"Submission {getattr(submission, 'id', '')} status updated"
+                            try: n.sender_id = None
+                            except Exception: pass
+                            try: n.urgency = "high"
+                            except Exception: pass
+                            try: n.status = "UNREAD"
+                            except Exception: pass
+                            try: n.sent_at = now
+                            except Exception: pass
+
+                            db.session.add(n)
+                            db.session.commit()
+                    except Exception:
+                        try:
+                            db.session.rollback()
+                        except Exception:
+                            pass
+
+                    return
+                except Exception as second_err:
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        pass
+                    # Re-raise the original DB error for visibility
+                    raise second_err from first_err
+
+            # No usable DB label found or fallback failed — surface clear error
+            raise first_err
+
+    @app.route('/api/regulator/approve-submission', methods=['POST'])
+    def regulator_approve_submission():
+        payload = request.get_json(force=True, silent=True) or {}
+        sid = payload.get('submission_id')
+        comments = payload.get('comments')
+        if not sid:
+            return jsonify({'success': False, 'error': 'submission_id required'}), 400
+
+        sub = db.session.get(DataSubmission, sid)
+        if not sub:
+            return jsonify({'success': False, 'error': 'submission not found'}), 404
+
+        current_app.logger.info("🟢 Regulator APPROVAL request received")
+        try:
+            _set_status_and_commit(sub, 'REGULATOR_APPROVED', comments)
+            current_app.logger.info(f"✅ Submission {sid} APPROVED")
+            return jsonify({'success': True, 'submission_id': sid}), 200
         except Exception as e:
-            db.session.rollback()
-            print(f"❌ Error approving submission: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            current_app.logger.error("❌ Error approving submission: %s", str(e))
             return jsonify({'success': False, 'error': str(e)}), 500
 
-    @app.route('/api/regulator/reject-submission', methods=['POST', 'OPTIONS'])
+
+    @app.route('/api/regulator/reject-submission', methods=['POST'])
     def regulator_reject_submission():
-        # Handle CORS preflight
-        if request.method == 'OPTIONS':
-            return '', 200
-            
+        payload = request.get_json(force=True, silent=True) or {}
+        sid = payload.get('submission_id')
+        comments = payload.get('comments')
+        if not sid:
+            return jsonify({'success': False, 'error': 'submission_id required'}), 400
+
+        sub = db.session.get(DataSubmission, sid)
+        if not sub:
+            return jsonify({'success': False, 'error': 'submission not found'}), 404
+
+        current_app.logger.info("⛔ Regulator REJECTION request received")
         try:
-            print("🔴 Regulator REJECTION request received")
-            data = request.get_json()
-            print(f"📦 Rejection data: {data}")
-            
-            submission_id = data.get('submission_id')
-            regulator_comments = data.get('comments', 'No reason provided')
-            
-            if not submission_id:
-                return jsonify({'success': False, 'error': 'submission_id is required'}), 400
-            
-            # Find the submission
-            submission = DataSubmission.query.get(submission_id)
-            if not submission:
-                return jsonify({'success': False, 'error': 'Submission not found'}), 404
-            
-            if submission.status != SubmissionStatus.INSURER_SUBMITTED:
-                return jsonify({
-                    'success': False,
-                    'error': f'Submission is not in pending status. Current status: {submission.status.value}'
-                }), 400
-            
-            # Update submission status to REJECTED
-            submission.status = SubmissionStatus.REJECTED
-            submission.regulator_rejected_at = datetime.utcnow()  # ✅ Use correct field name
-            submission.regulator_comments = regulator_comments
-            
-            db.session.commit()
-            
-            print(f"❌ Submission {submission_id} REJECTED by regulator")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Submission rejected',
-                'submission_id': submission_id,
-                'status': 'REJECTED',
-                'rejected_at': submission.regulator_rejected_at.isoformat(),  # ✅ Use correct field name
-                'comments': regulator_comments
-            }), 200
-            
+            _set_status_and_commit(sub, 'REGULATOR_REJECTED', comments)
+            current_app.logger.info(f"⛔ Submission {sid} REJECTED")
+            return jsonify({'success': True, 'submission_id': sid}), 200
         except Exception as e:
-            db.session.rollback()
-            print(f"❌ Error rejecting submission: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            current_app.logger.error("❌ Error rejecting submission: %s", str(e))
             return jsonify({'success': False, 'error': str(e)}), 500
 
     @app.route('/api/notifications/regulator/<regulator_id>', methods=['GET'])
@@ -379,7 +511,6 @@ def register_regulator_routes(app):
                 'notifications': []
             }), 200
 
-<<<<<<< HEAD
     @app.route('/api/regulator/upload-and-summarize', methods=['POST'])
     def regulator_upload_and_summarize():
         """
@@ -509,7 +640,6 @@ def register_regulator_routes(app):
             return jsonify({'success': False, 'error': str(e)}), 500
  
             
-=======
     @app.route('/api/regulator/risk-assessments', methods=['GET'])
     def regulator_get_risk_assessments():
         """Get all risk assessments for regulator oversight"""
@@ -587,7 +717,7 @@ def register_regulator_routes(app):
                 'success': True,
                 'tests': tests_data,
                 'total_count': len(tests_data)
-            }), 200
+            }, 200)
             
         except Exception as e:
             print(f"❌ Error fetching stress tests: {str(e)}")
@@ -787,5 +917,22 @@ def register_regulator_routes(app):
                 'stats': {}
             }), 500
 
+    def _get_db_enum_labels(enum_type_name: str) -> list:
+        """Return list of labels for a Postgres enum type (empty list on failure)."""
+        try:
+            sql = sa.text(
+                "SELECT enumlabel FROM pg_enum "
+                "JOIN pg_type ON pg_enum.enumtypid = pg_type.oid "
+                "WHERE pg_type.typname = :ename ORDER BY pg_enum.enumsortorder"
+            )
+            rows = db.session.execute(sql, {"ename": enum_type_name}).fetchall()
+            return [r[0] for r in rows]
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            return []
+
     print("✅ Regulator routes registered successfully")
->>>>>>> 86c77f4 (added ai agent)
+

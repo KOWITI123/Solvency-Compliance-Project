@@ -17,15 +17,11 @@ import traceback
 print("🔧 DEBUG: All imports completed")
 
 app = Flask(__name__)
+# allow dev frontend to call API (temporarily permissive)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
 app.config["DEBUG"] = True
 app.config["PROPAGATE_EXCEPTIONS"] = True
-
-# CORS configuration
-CORS(app, 
-     origins=["http://localhost:3000", "http://localhost:5173"],
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-     allow_headers=['Content-Type', 'Authorization'],
-     supports_credentials=False)
 
 # Connect database
 connect_database(app)

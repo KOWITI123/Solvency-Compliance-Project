@@ -47,7 +47,7 @@ interface ComplianceMetrics {
 }
 
 interface PendingSubmission {
-  id: number;
+  id: number | string;
   data_hash?: string;
   capital: number;
   liabilities: number;
@@ -57,7 +57,7 @@ interface PendingSubmission {
     email?: string;
   };
   status: string;
-<<<<<<< HEAD
+
   ai_extraction?: ComplianceMetrics;
   submission_date?: string;
   financial_statement_url?: string;
@@ -75,7 +75,6 @@ interface PendingSubmission {
   related_party_net_exposure?: number | string;
   claims_development_method?: string;
   auditors_unqualified_opinion?: boolean | null;
-=======
   risk_assessment?: {
     underwriting_risk?: number;
     market_risk?: number;
@@ -85,11 +84,10 @@ interface PendingSubmission {
   orsa_status?: string;
   last_stress_test?: string;
   stress_test_complete?: boolean;
->>>>>>> 86c77f4 (added ai agent)
 }
 
 interface RegulatorNotification {
-  id: number;
+  id: number | string;
   message: string;
   urgency: string;
   sent_at: string;
@@ -99,21 +97,21 @@ interface RegulatorNotification {
 }
 
 export function AuditDashboardPage() {
-  const { 
-    reviews, 
-    submissions, 
-    isLoading, 
-    fetchReviews, 
-    fetchSubmissions, 
-    addReview 
+  const {
+    reviews,
+    submissions,
+    isLoading,
+    fetchReviews,
+    fetchSubmissions,
+    addReview
   } = useAuditStore();
-  
+
   const { user } = useAuthStore();
   const [selectedSubmission, setSelectedSubmission] = useState<string | null>(null);
   const [reviewComment, setReviewComment] = useState('');
   const [additionalComment, setAdditionalComment] = useState('');
   const [reviewStatus, setReviewStatus] = useState<AuditReview['status']>('pending');
-  
+
   // New state for regulator approval functionality
   const [pendingSubmissions, setPendingSubmissions] = useState<PendingSubmission[]>([]);
   const [regulatorNotifications, setRegulatorNotifications] = useState<RegulatorNotification[]>([]);
@@ -121,16 +119,14 @@ export function AuditDashboardPage() {
   const [approvalComments, setApprovalComments] = useState('');
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
-<<<<<<< HEAD
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [aiInsurerId, setAiInsurerId] = useState<string>('');
   const [aiUploading, setAiUploading] = useState(false);
   const [aiSummaryResult, setAiSummaryResult] = useState<any | null>(null);
-=======
   const [riskAssessments, setRiskAssessments] = useState<any[]>([]);
   const [stressTests, setStressTests] = useState<any[]>([]);
->>>>>>> 86c77f4 (added ai agent)
-  
+
   // Existing filters
   const [insurerIdFilter, setInsurerIdFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -140,9 +136,7 @@ export function AuditDashboardPage() {
   const fetchPendingSubmissions = async () => {
     try {
       console.log('📋 Fetching pending submissions for audit...');
-      
       const response = await fetch('http://localhost:5000/api/regulator/pending-submissions');
-      
       if (response.ok) {
         const data = await response.json();
         console.log('✅ Pending submissions data:', data);
@@ -160,9 +154,7 @@ export function AuditDashboardPage() {
   const fetchRegulatorNotifications = useCallback(async () => {
     try {
       console.log('📬 Fetching regulator notifications...');
-      
       const response = await fetch('http://localhost:5000/api/notifications/regulator/reg-1');
-      
       if (response.ok) {
         const data = await response.json();
         console.log('✅ Notifications data:', data);
@@ -203,14 +195,12 @@ export function AuditDashboardPage() {
 
   const approveSubmission = async () => {
     if (!selectedPendingSubmission) return;
-    
+
     setIsApproving(true);
     try {
       const response = await fetch('http://localhost:5000/api/regulator/approve-submission', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           submission_id: selectedPendingSubmission.id,
           comments: approvalComments || 'Approved by regulator'
@@ -218,13 +208,13 @@ export function AuditDashboardPage() {
       });
 
       const data = await response.json();
-      
+
       if (response.ok) {
-        const shortHash = selectedPendingSubmission.data_hash ? `${selectedPendingSubmission.data_hash.substring(0, 8)}...` : '';
+        const shortHash = selectedPendingSubmission.data_hash ? `${String(selectedPendingSubmission.data_hash).substring(0, 8)}...` : '';
         toast.success('Submission Approved!', {
           description: `Data hash ${shortHash} has been approved.`
         });
-        
+
         fetchPendingSubmissions();
         fetchRegulatorNotifications();
         setSelectedPendingSubmission(null);
@@ -235,9 +225,7 @@ export function AuditDashboardPage() {
         });
       }
     } catch (error) {
-      toast.error('Network Error', {
-        description: 'Could not connect to server'
-      });
+      toast.error('Network Error', { description: 'Could not connect to server' });
     } finally {
       setIsApproving(false);
     }
@@ -245,14 +233,12 @@ export function AuditDashboardPage() {
 
   const rejectSubmission = async () => {
     if (!selectedPendingSubmission) return;
-    
+
     setIsRejecting(true);
     try {
       const response = await fetch('http://localhost:5000/api/regulator/reject-submission', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           submission_id: selectedPendingSubmission.id,
           comments: approvalComments || 'Submission rejected by regulator'
@@ -260,13 +246,13 @@ export function AuditDashboardPage() {
       });
 
       const data = await response.json();
-      
+
       if (response.ok) {
-        const shortHash = selectedPendingSubmission.data_hash ? `${selectedPendingSubmission.data_hash.substring(0, 8)}...` : '';
+        const shortHash = selectedPendingSubmission.data_hash ? `${String(selectedPendingSubmission.data_hash).substring(0, 8)}...` : '';
         toast.success('Submission Rejected', {
           description: `Data hash ${shortHash} has been rejected.`
         });
-        
+
         fetchPendingSubmissions();
         fetchRegulatorNotifications();
         setSelectedPendingSubmission(null);
@@ -277,15 +263,12 @@ export function AuditDashboardPage() {
         });
       }
     } catch (error) {
-      toast.error('Network Error', {
-        description: 'Could not connect to server'
-      });
+      toast.error('Network Error', { description: 'Could not connect to server' });
     } finally {
       setIsRejecting(false);
     }
   };
 
-<<<<<<< HEAD
   const uploadAndSummarize = async () => {
     const fileEl = fileInputRef.current;
     if (!fileEl || !fileEl.files || fileEl.files.length === 0) {
@@ -317,21 +300,24 @@ export function AuditDashboardPage() {
       setAiSummaryResult({ error: 'Network error' });
     } finally {
       setAiUploading(false);
-=======
+    }
+  };
+
   const approveRiskAssessment = async (assessmentId: number) => {
     try {
       const response = await fetch(`http://localhost:5000/api/regulator/approve-risk/${assessmentId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
-      
+
       if (response.ok) {
         toast.success('Risk assessment approved');
         fetchRiskAssessments();
+      } else {
+        toast.error('Failed to approve risk assessment');
       }
     } catch (error) {
       toast.error('Failed to approve risk assessment');
->>>>>>> 86c77f4 (added ai agent)
     }
   };
 
@@ -340,15 +326,15 @@ export function AuditDashboardPage() {
       fetchReviews();
       fetchSubmissions();
     }
-    
+
     // Existing regulator data
     fetchPendingSubmissions();
     fetchRegulatorNotifications();
-    
+
     // NEW: Add risk management data
     fetchRiskAssessments();
     fetchStressTests();
-    
+
     // Refresh all data every 30 seconds
     const interval = setInterval(() => {
       fetchPendingSubmissions();
@@ -358,24 +344,24 @@ export function AuditDashboardPage() {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [fetchReviews, fetchSubmissions, fetchRegulatorNotifications, user]);
+  }, [fetchReviews, fetchSubmissions, fetchRegulatorNotifications]);
 
   // Enhanced data processing
-  const anonymizedData = useMemo(() => 
-    submissions ? submissions.map(s => ({
+  const anonymizedData = useMemo(() =>
+    submissions ? submissions.map((s: any) => ({
       ...s,
-      insurerId: `INS-${(s.id.charCodeAt(s.id.length - 1) % 5) + 101}`,
-      solvencyRatio: s.capital / s.liabilities
+      insurerId: `INS-${(String(s.id).charCodeAt(String(s.id).length - 1) % 5) + 101}`,
+      solvencyRatio: s.capital / (s.liabilities || 1)
     })) : [], [submissions]);
 
-  const filteredData = useMemo(() => 
-    anonymizedData.filter(s => 
+  const filteredData = useMemo(() =>
+    anonymizedData.filter((s: any) =>
       (insurerIdFilter === 'all' || s.insurerId === insurerIdFilter) &&
       (statusFilter === 'all' || s.status === statusFilter)
     ), [anonymizedData, insurerIdFilter, statusFilter]);
 
   const complianceDistribution = useMemo(() => {
-    const compliant = filteredData.filter(s => s.solvencyRatio >= 1).length;
+    const compliant = filteredData.filter((s: any) => s.solvencyRatio >= 1).length;
     const nonCompliant = filteredData.length - compliant;
     return [
       { name: 'Compliant', value: compliant },
@@ -383,20 +369,20 @@ export function AuditDashboardPage() {
     ];
   }, [filteredData]);
 
-  const averageSolvencyRatio = useMemo(() => 
-    filteredData.length === 0 ? 0 : 
-    filteredData.reduce((sum, s) => sum + s.solvencyRatio, 0) / filteredData.length,
+  const averageSolvencyRatio = useMemo(() =>
+    filteredData.length === 0 ? 0 :
+      filteredData.reduce((sum: number, s: any) => sum + (s.solvencyRatio || 0), 0) / filteredData.length,
     [filteredData]
   );
 
   const compliancePercentage = useMemo(() => {
     if (filteredData.length === 0) return 0;
-    const compliant = filteredData.filter(s => s.solvencyRatio >= 1).length;
+    const compliant = filteredData.filter((s: any) => s.solvencyRatio >= 1).length;
     return (compliant / filteredData.length) * 100;
   }, [filteredData]);
 
-  const uniqueInsurerIds = useMemo(() => 
-    [...new Set(anonymizedData.map(s => s.insurerId))].sort(),
+  const uniqueInsurerIds = useMemo(() =>
+    [...new Set(anonymizedData.map((s: any) => s.insurerId))].sort(),
     [anonymizedData]
   );
 
@@ -408,7 +394,7 @@ export function AuditDashboardPage() {
 
     try {
       if (addReview) {
-        const fullComment = additionalComment.trim() 
+        const fullComment = additionalComment.trim()
           ? `${reviewComment}\n\nAdditional notes: ${additionalComment}`
           : reviewComment;
 
@@ -418,7 +404,7 @@ export function AuditDashboardPage() {
           status: reviewStatus,
           comments: fullComment,
         });
-        
+
         toast.success('Review submitted successfully');
         setSelectedSubmission(null);
         setReviewComment('');
@@ -452,7 +438,7 @@ export function AuditDashboardPage() {
   const getStatusBadge = (status: string, solvencyRatio?: number) => {
     const isCompliant = solvencyRatio ? solvencyRatio >= 1 : status === 'approved';
     const displayStatus = solvencyRatio ? (isCompliant ? 'Compliant' : 'Non-Compliant') : status;
-    
+
     const statusConfig = {
       'Compliant': { variant: 'default' as const, className: 'bg-green-100 text-green-800' },
       'Non-Compliant': { variant: 'destructive' as const, className: 'bg-red-100 text-red-800' },
@@ -466,11 +452,11 @@ export function AuditDashboardPage() {
       'REJECTED': { variant: 'destructive' as const, className: 'bg-red-100 text-red-800' },
     };
 
-    const config = statusConfig[displayStatus as keyof typeof statusConfig] || statusConfig.pending;
+    const config = (statusConfig as any)[displayStatus] || statusConfig.pending;
 
     return (
       <Badge variant={config.variant} className={config.className}>
-        {displayStatus.replace('_', ' ').toUpperCase()}
+        {String(displayStatus).replace('_', ' ').toUpperCase()}
       </Badge>
     );
   };
@@ -506,15 +492,12 @@ export function AuditDashboardPage() {
     const calculateStressedSolvency = () => {
       // Get current capital and liabilities
       const currentCapital = currentSolvency; // Use state value for current capital
-      const currentLiabilities = 0; // Set this to the actual liabilities value as needed
-      
+      const currentLiabilities = 1; // avoid division by zero
       // Apply stress factors
       const stressedCapital = currentCapital * (1 - stressScenario.marketDecline / 100);
       const stressedLiabilities = currentLiabilities * (1 + stressScenario.claimsIncrease / 100);
-      
       // Calculate new solvency ratio
       const stressedRatio = (stressedCapital / stressedLiabilities) * 100;
-      
       return {
         stressedRatio,
         stillCompliant: stressedRatio >= 100,
@@ -531,34 +514,34 @@ export function AuditDashboardPage() {
           <div className="space-y-4">
             <div>
               <label>Market Decline (%)</label>
-              <input 
-                type="range" 
-                min="0" 
-                max="50" 
+              <input
+                type="range"
+                min="0"
+                max="50"
                 value={stressScenario.marketDecline}
                 onChange={(e) => setStressScenario({
-                  ...stressScenario, 
+                  ...stressScenario,
                   marketDecline: parseInt(e.target.value)
                 })}
               />
               <span>{stressScenario.marketDecline}%</span>
             </div>
-            
+
             <div>
               <label>Claims Increase (%)</label>
-              <input 
-                type="range" 
-                min="0" 
-                max="200" 
+              <input
+                type="range"
+                min="0"
+                max="200"
                 value={stressScenario.claimsIncrease}
                 onChange={(e) => setStressScenario({
-                  ...stressScenario, 
+                  ...stressScenario,
                   claimsIncrease: parseInt(e.target.value)
                 })}
               />
               <span>{stressScenario.claimsIncrease}%</span>
             </div>
-            
+
             <StressTestResults result={calculateStressedSolvency()} />
           </div>
         </CardContent>
@@ -638,14 +621,13 @@ export function AuditDashboardPage() {
           <CardContent>
             <div className="space-y-2">
               {regulatorNotifications.slice(0, 3).map((notification, index) => {
-                // ✅ COMPLETELY SAFE WITH MULTIPLE FALLBACKS
                 if (!notification) return null;
-                
+
                 const notificationId = notification.id || `notification-${index}`;
                 const notificationMessage = notification.message || 'No message available';
                 const notificationUrgency = notification.urgency || 'Medium';
                 const senderUsername = (notification.sender && notification.sender.username) || 'System';
-                
+
                 return (
                   <div key={notificationId} className="flex items-center justify-between p-2 bg-white rounded border">
                     <div className="flex-1">
@@ -671,7 +653,7 @@ export function AuditDashboardPage() {
       )}
 
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="overview">Overview & Analytics</TabsTrigger>
           <TabsTrigger value="approvals" className="relative">
             Regulatory Approvals
@@ -687,6 +669,7 @@ export function AuditDashboardPage() {
           <TabsTrigger value="ai-summaries">AI Summaries</TabsTrigger>
         </TabsList>
 
+        {/* Overview */}
         <TabsContent value="overview">
           <div className="space-y-6">
             {/* Key Metrics Cards - Include pending submissions count */}
@@ -792,233 +775,270 @@ export function AuditDashboardPage() {
                 </CardContent>
               </Card>
             </div>
-              </div>
-            </TabsContent>
+          </div>
+        </TabsContent>
 
-            {/* NEW: Regulatory Approvals Tab - ✅ FIXED SAFE PROPERTY ACCESS */}
-            <TabsContent value="approvals">
-              <div className="space-y-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Hash className="h-5 w-5" />
-                      Pending Submissions for Regulatory Approval
-                      <Badge variant="outline">{pendingSubmissions.length}</Badge>
-                    </CardTitle>
-                    <CardDescription>
-                      Two-stage approval workflow: Insurer submission → Regulator approval
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {Array.isArray(pendingSubmissions) && pendingSubmissions.length > 0 ? (
-                        pendingSubmissions.map((submission, index) => {
-                          if (!submission) return null;
-                          const submissionId = submission.id || `submission-${index}`;
-                          const insurerUsername = (submission.insurer && submission.insurer.username) || 'Unknown Insurer';
-                          const insurerEmail = (submission.insurer && submission.insurer.email) || 'N/A';
-                          const dataHash = submission.data_hash || 'N/A';
-                          const capital = submission.capital || 0;
-                          const liabilities = submission.liabilities || 0;
-                          const solvencyRatio = submission.solvency_ratio || 0;
-                          const submissionDate = submission.submission_date;
-                          const status = submission.status || 'UNKNOWN';
+        {/* Approvals */}
+        <TabsContent value="approvals">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Hash className="h-5 w-5" />
+                  Pending Submissions for Regulatory Approval
+                  <Badge variant="outline">{pendingSubmissions.length}</Badge>
+                </CardTitle>
+                <CardDescription>
+                  Two-stage approval workflow: Insurer submission → Regulator approval
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {Array.isArray(pendingSubmissions) && pendingSubmissions.length > 0 ? (
+                    pendingSubmissions.map((submission, index) => {
+                      if (!submission) return null;
+                      const submissionId = submission.id || `submission-${index}`;
+                      const insurerUsername = (submission.insurer && submission.insurer.username) || 'Unknown Insurer';
+                      const insurerEmail = (submission.insurer && submission.insurer.email) || 'N/A';
+                      const dataHash = submission.data_hash || 'N/A';
+                      const capital = submission.capital || 0;
+                      const liabilities = submission.liabilities || 0;
+                      const solvencyRatio = submission.solvency_ratio || 0;
+                      const submissionDate = submission.submission_date;
+                      const status = submission.status || 'UNKNOWN';
 
-                          return (
-                            <div key={submissionId} className="border rounded-lg p-4 bg-gradient-to-r from-blue-50 to-white">
-                              <div className="flex justify-between items-start mb-3">
-                                <div>
-                                  <h4 className="font-medium text-lg">{insurerUsername}</h4>
-                                  <p className="text-sm text-muted-foreground flex items-center gap-1">
-                                    <Hash className="h-3 w-3" />
-                                    Data Hash: <code className="bg-gray-100 px-1 rounded text-xs">{dataHash.substring(0, 20)}...</code>
-                                  </p>
-                                  <p className="text-xs text-muted-foreground mt-1">
-                                    Email: {insurerEmail}
-                                  </p>
-                                </div>
-                                <div className="flex flex-col items-end gap-2">
-                                  {getStatusBadge(status)}
-                                  <span className="text-xs text-muted-foreground">
-                                    {submissionDate ? new Date(submissionDate).toLocaleDateString() : 'N/A'}
-                                  </span>
-                                </div>
-                              </div>
-                              
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 p-3 bg-white rounded border">
-                                <div>
-                                  <label className="text-xs text-muted-foreground font-medium">Capital (KES)</label>
-                                  <p className="font-bold text-green-600">{capital.toLocaleString()}</p>
-                                </div>
-                                <div>
-                                  <label className="text-xs text-muted-foreground font-medium">Liabilities (KES)</label>
-                                  <p className="font-bold text-red-600">{liabilities.toLocaleString()}</p>
-                                </div>
-                                <div>
-                                  <label className="text-xs text-muted-foreground font-medium">Solvency Ratio</label>
-                                  <p className={`font-bold text-lg ${solvencyRatio >= 100 ? 'text-green-600' : 'text-red-600'}`}>
-                                    {solvencyRatio}%
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="flex justify-end">
-                                <Dialog>
-                                  <DialogTrigger asChild>
-                                    <Button variant="outline" onClick={() => setSelectedPendingSubmission(submission)}>
-                                      Review &amp; Approve
-                                    </Button>
-                                  </DialogTrigger>
-                                  <DialogContent>
-                                    {/* Scrollable container so large dialogs fit small screens */}
-                                    <div className="max-h-[70vh] w-full overflow-y-auto pr-2">
-                                      <DialogHeader>
-                                        <DialogTitle>Review &amp; Approve Submission</DialogTitle>
-                                        <DialogDescription>
-                                          Please review the submission details and leave a comment before approving or rejecting.
-                                        </DialogDescription>
-                                      </DialogHeader>
-                                      <div className="space-y-2">
-                                        <div>
-                                          <span className="font-semibold">Insurer:</span> {insurerUsername}
-                                        </div>
-                                        <div>
-                                          <span className="font-semibold">Data Hash:</span> <code>{dataHash}</code>
-                                        </div>
-                                        <div>
-                                          <span className="font-semibold">Capital:</span> {capital.toLocaleString()}
-                                        </div>
-                                        <div>
-                                          <span className="font-semibold">Liabilities:</span> {liabilities.toLocaleString()}
-                                        </div>
-                                        <div>
-                                          <span className="font-semibold">Solvency Ratio:</span> {solvencyRatio}%
-                                        </div>
-
-                                        {/* Manual Inputs Summary */}
-                                        <div className="mt-4 p-4 bg-gray-50 rounded border">
-                                          <h5 className="font-semibold mb-2">Manual Inputs Summary</h5>
-                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                                            <div><b>GWP:</b> {submission.gwp ?? 'N/A'}</div>
-                                            <div><b>Net Claims Paid:</b> {submission.net_claims_paid ?? 'N/A'}</div>
-                                            <div><b>Investment Income (Total):</b> {submission.investment_income_total ?? 'N/A'}</div>
-                                            <div><b>Commission Expense (Total):</b> {submission.commission_expense_total ?? 'N/A'}</div>
-                                            <div><b>Operating Expenses (Total):</b> {submission.operating_expenses_total ?? 'N/A'}</div>
-                                            <div><b>Profit Before Tax:</b> {submission.profit_before_tax ?? 'N/A'}</div>
-                                            <div><b>Contingency Reserve (Statutory):</b> {submission.contingency_reserve_statutory ?? 'N/A'}</div>
-                                            <div><b>IBNR Reserve (Gross):</b> {submission.ibnr_reserve_gross ?? 'N/A'}</div>
-                                            <div><b>IFRS17 Status:</b> {submission.irfs17_implementation_status ?? 'N/A'}</div>
-                                            <div><b>Related Party Net Exposure:</b> {submission.related_party_net_exposure ?? 'N/A'}</div>
-                                            <div><b>Claims Development Method:</b> {submission.claims_development_method ?? 'N/A'}</div>
-                                            <div><b>Auditors Unqualified Opinion:</b> {submission.auditors_unqualified_opinion ? 'Yes' : (submission.auditors_unqualified_opinion === false ? 'No' : 'N/A')}</div>
-                                          </div>
-
-                                          {/* File link for manual verification */}
-                                          {submission.financial_statement_url && (
-                                            <div className="mt-3">
-                                              <a
-                                                href={submission.financial_statement_url}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="text-blue-600 underline"
-                                              >
-                                                View uploaded financial statement {submission.financial_statement_filename ? `(${submission.financial_statement_filename})` : ''}
-                                              </a>
-                                            </div>
-                                          )}
-                                        </div>
-
-                                        {/* Show only the new compliance metrics */}
-                                        {submission.ai_extraction && (
-                                          <div className="mt-4 p-4 bg-gray-50 rounded border">
-                                            <h5 className="font-semibold mb-2">Compliance Metrics Overview</h5>
-                                            <ul className="text-sm space-y-1">
-                                              <li><b>Capital Adequacy Ratio (CAR):</b> {submission.ai_extraction.car ?? 'N/A'}</li>
-                                              <li><b>Required Capital:</b> {submission.ai_extraction.required_capital ?? 'N/A'}</li>
-                                              <li><b>Available Capital:</b> {submission.ai_extraction.available_capital ?? 'N/A'}</li>
-                                              <li><b>Asset Adequacy:</b> {String(submission.ai_extraction.asset_adequacy ?? 'N/A')}</li>
-                                              <li><b>Insurance Service Result:</b> {submission.ai_extraction.insurance_service_result ?? 'N/A'}</li>
-                                              <li><b>Insurance Revenue Growth:</b> {submission.ai_extraction.insurance_revenue_growth ?? 'N/A'}</li>
-                                              <li><b>Adequacy of Insurance Liabilities:</b> {String(submission.ai_extraction.insurance_liabilities_adequacy ?? 'N/A')}</li>
-                                              <li><b>Reinsurance Strategy & Credit Risk:</b> {submission.ai_extraction.reinsurance_strategy ?? 'N/A'}</li>
-                                              <li><b>Claims Development/Reserving:</b> {submission.ai_extraction.claims_development ?? 'N/A'}</li>
-                                              <li><b>Internal Controls:</b> {submission.ai_extraction.internal_controls ?? 'N/A'}</li>
-                                              <li><b>Board Structure & Independence:</b> {submission.ai_extraction.board_structure ?? 'N/A'}</li>
-                                              <li><b>Board Committee Oversight:</b> {submission.ai_extraction.board_committee_oversight ?? 'N/A'}</li>
-                                              <li><b>Related Party Transactions:</b> {submission.ai_extraction.related_party_transactions ?? 'N/A'}</li>
-                                              <li><b>Investment Policy Submission:</b> {submission.ai_extraction.investment_policy_submission ?? 'N/A'}</li>
-                                            </ul>
-                                          </div>
-                                        )}
-                                        <Label htmlFor="approvalComments" className="mt-2">Comments</Label>
-                                        <Textarea
-                                          id="approvalComments"
-                                          value={approvalComments}
-                                          onChange={e => setApprovalComments(e.target.value)}
-                                          placeholder="Leave a comment (required for rejection)"
-                                        />
-                                      </div>
-                                      <DialogFooter className="sticky bottom-0 bg-white/90 mt-4 pt-2">
-                                        <Button
-                                          variant="destructive"
-                                          onClick={rejectSubmission}
-                                          disabled={isRejecting}
-                                        >
-                                          {isRejecting ? 'Rejecting...' : 'Reject'}
-                                        </Button>
-                                        <Button
-                                          variant="default"
-                                          onClick={approveSubmission}
-                                          disabled={isApproving}
-                                        >
-                                          {isApproving ? 'Approving...' : 'Approve'}
-                                        </Button>
-                                      </DialogFooter>
-                                    </div>
-                                  </DialogContent>
-                                </Dialog>
-                              </div>
+                      return (
+                        <div key={submissionId} className="border rounded-lg p-4 bg-gradient-to-r from-blue-50 to-white">
+                          <div className="flex justify-between items-start mb-3">
+                            <div>
+                              <h4 className="font-medium text-lg">{insurerUsername}</h4>
+                              <p className="text-sm text-muted-foreground flex items-center gap-1">
+                                <Hash className="h-3 w-3" />
+                                Data Hash: <code className="bg-gray-100 px-1 rounded text-xs">{String(dataHash).substring(0, 20)}...</code>
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Email: {insurerEmail}
+                              </p>
                             </div>
-                          );
-                        })
-                      ) : (
-                        <p className="text-muted-foreground">No pending submissions for approval.</p>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </TabsContent>
+                            <div className="flex flex-col items-end gap-2">
+                              {getStatusBadge(status)}
+                              <span className="text-xs text-muted-foreground">
+                                {submissionDate ? new Date(submissionDate).toLocaleDateString() : 'N/A'}
+                              </span>
+                            </div>
+                          </div>
 
-            /* AI SUMMARIES TAB */
-            <TabsContent value="ai-summaries">
-              <div className="space-y-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>AI Summaries</CardTitle>
-                    <CardDescription>Upload an insurer financial statement (PDF). Regulator-only feature: generate a downloadable AI summary.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div>
-                        <Label>Insurer ID (optional)</Label>
-                        <Input value={aiInsurerId} onChange={e => setAiInsurerId(e.target.value)} placeholder="Insurer ID (optional)" />
-                      </div>
-                      <div>
-                        <Label>Financial Statement (PDF)</Label>
-                        <input ref={fileInputRef} type="file" accept="application/pdf" />
-                      </div>
-                    </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 p-3 bg-white rounded border">
+                            <div>
+                              <label className="text-xs text-muted-foreground font-medium">Capital (KES)</label>
+                              <p className="font-bold text-green-600">{Number(capital).toLocaleString()}</p>
+                            </div>
+                            <div>
+                              <label className="text-xs text-muted-foreground font-medium">Liabilities (KES)</label>
+                              <p className="font-bold text-red-600">{Number(liabilities).toLocaleString()}</p>
+                            </div>
+                            <div>
+                              <label className="text-xs text-muted-foreground font-medium">Solvency Ratio</label>
+                              <p className={`font-bold text-lg ${solvencyRatio >= 100 ? 'text-green-600' : 'text-red-600'}`}>
+                                {solvencyRatio}%
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex justify-end">
+                            <Dialog>
+                              <DialogTrigger asChild>
+                                <Button variant="outline" onClick={() => setSelectedPendingSubmission(submission)}>
+                                  Review &amp; Approve
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent>
+                                <div className="max-h-[70vh] w-full overflow-y-auto pr-2">
+                                  <DialogHeader>
+                                    <DialogTitle>Review &amp; Approve Submission</DialogTitle>
+                                    <DialogDescription>
+                                      Please review the submission details and leave a comment before approving or rejecting.
+                                    </DialogDescription>
+                                  </DialogHeader>
+                                  <div className="space-y-2">
+                                    <div>
+                                      <span className="font-semibold">Insurer:</span> {insurerUsername}
+                                    </div>
+                                    <div>
+                                      <span className="font-semibold">Data Hash:</span> <code>{dataHash}</code>
+                                    </div>
+                                    <div>
+                                      <span className="font-semibold">Capital:</span> {Number(capital).toLocaleString()}
+                                    </div>
+                                    <div>
+                                      <span className="font-semibold">Liabilities:</span> {Number(liabilities).toLocaleString()}
+                                    </div>
+                                    <div>
+                                      <span className="font-semibold">Solvency Ratio:</span> {solvencyRatio}%
+                                    </div>
 
-<<<<<<< HEAD
-                    <div className="mt-4 flex gap-2">
-                      <Button onClick={uploadAndSummarize} disabled={aiUploading}>
-                        {aiUploading ? 'Uploading & summarizing...' : 'Upload & Summarize'}
-                      </Button>
-                      <Button variant="outline" onClick={() => { setAiSummaryResult(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}>
-                        Clear
-                      </Button>
-                    </div>
-=======
+                                    {/* Manual Inputs Summary */}
+                                    <div className="mt-4 p-4 bg-gray-50 rounded border">
+                                      <h5 className="font-semibold mb-2">Manual Inputs Summary</h5>
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                                        <div><b>GWP:</b> {submission.gwp ?? 'N/A'}</div>
+                                        <div><b>Net Claims Paid:</b> {submission.net_claims_paid ?? 'N/A'}</div>
+                                        <div><b>Investment Income (Total):</b> {submission.investment_income_total ?? 'N/A'}</div>
+                                        <div><b>Commission Expense (Total):</b> {submission.commission_expense_total ?? 'N/A'}</div>
+                                        <div><b>Operating Expenses (Total):</b> {submission.operating_expenses_total ?? 'N/A'}</div>
+                                        <div><b>Profit Before Tax:</b> {submission.profit_before_tax ?? 'N/A'}</div>
+                                        <div><b>Contingency Reserve (Statutory):</b> {submission.contingency_reserve_statutory ?? 'N/A'}</div>
+                                        <div><b>IBNR Reserve (Gross):</b> {submission.ibnr_reserve_gross ?? 'N/A'}</div>
+                                        <div><b>IFRS17 Status:</b> {submission.irfs17_implementation_status ?? 'N/A'}</div>
+                                        <div><b>Related Party Net Exposure:</b> {submission.related_party_net_exposure ?? 'N/A'}</div>
+                                        <div><b>Claims Development Method:</b> {submission.claims_development_method ?? 'N/A'}</div>
+                                        <div><b>Auditors Unqualified Opinion:</b> {submission.auditors_unqualified_opinion ? 'Yes' : (submission.auditors_unqualified_opinion === false ? 'No' : 'N/A')}</div>
+                                      </div>
+
+                                      {/* File link for manual verification */}
+                                      {submission.financial_statement_url && (
+                                        <div className="mt-3">
+                                          <a
+                                            href={submission.financial_statement_url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-blue-600 underline"
+                                          >
+                                            View uploaded financial statement {submission.financial_statement_filename ? `(${submission.financial_statement_filename})` : ''}
+                                          </a>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Show only the new compliance metrics */}
+                                    {submission.ai_extraction && (
+                                      <div className="mt-4 p-4 bg-gray-50 rounded border">
+                                        <h5 className="font-semibold mb-2">Compliance Metrics Overview</h5>
+                                        <ul className="text-sm space-y-1">
+                                          <li><b>Capital Adequacy Ratio (CAR):</b> {submission.ai_extraction.car ?? 'N/A'}</li>
+                                          <li><b>Required Capital:</b> {submission.ai_extraction.required_capital ?? 'N/A'}</li>
+                                          <li><b>Available Capital:</b> {submission.ai_extraction.available_capital ?? 'N/A'}</li>
+                                          <li><b>Asset Adequacy:</b> {String(submission.ai_extraction.asset_adequacy ?? 'N/A')}</li>
+                                          <li><b>Insurance Service Result:</b> {submission.ai_extraction.insurance_service_result ?? 'N/A'}</li>
+                                          <li><b>Insurance Revenue Growth:</b> {submission.ai_extraction.insurance_revenue_growth ?? 'N/A'}</li>
+                                          <li><b>Adequacy of Insurance Liabilities:</b> {String(submission.ai_extraction.insurance_liabilities_adequacy ?? 'N/A')}</li>
+                                          <li><b>Reinsurance Strategy & Credit Risk:</b> {submission.ai_extraction.reinsurance_strategy ?? 'N/A'}</li>
+                                          <li><b>Claims Development/Reserving:</b> {submission.ai_extraction.claims_development ?? 'N/A'}</li>
+                                          <li><b>Internal Controls:</b> {submission.ai_extraction.internal_controls ?? 'N/A'}</li>
+                                          <li><b>Board Structure & Independence:</b> {submission.ai_extraction.board_structure ?? 'N/A'}</li>
+                                          <li><b>Board Committee Oversight:</b> {submission.ai_extraction.board_committee_oversight ?? 'N/A'}</li>
+                                          <li><b>Related Party Transactions:</b> {submission.ai_extraction.related_party_transactions ?? 'N/A'}</li>
+                                          <li><b>Investment Policy Submission:</b> {submission.ai_extraction.investment_policy_submission ?? 'N/A'}</li>
+                                        </ul>
+                                      </div>
+                                    )}
+                                    <Label htmlFor="approvalComments" className="mt-2">Comments</Label>
+                                    <Textarea
+                                      id="approvalComments"
+                                      value={approvalComments}
+                                      onChange={e => setApprovalComments(e.target.value)}
+                                      placeholder="Leave a comment (required for rejection)"
+                                    />
+                                  </div>
+                                  <DialogFooter className="sticky bottom-0 bg-white/90 mt-4 pt-2">
+                                    <Button
+                                      variant="destructive"
+                                      onClick={rejectSubmission}
+                                      disabled={isRejecting}
+                                    >
+                                      {isRejecting ? 'Rejecting...' : 'Reject'}
+                                    </Button>
+                                    <Button
+                                      variant="default"
+                                      onClick={approveSubmission}
+                                      disabled={isApproving}
+                                    >
+                                      {isApproving ? 'Approving...' : 'Approve'}
+                                    </Button>
+                                  </DialogFooter>
+                                </div>
+                              </DialogContent>
+                            </Dialog>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p className="text-muted-foreground">No pending submissions for approval.</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* AI Summaries */}
+        <TabsContent value="ai-summaries">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>AI Summaries</CardTitle>
+                <CardDescription>Upload an insurer financial statement (PDF). Regulator-only feature: generate a downloadable AI summary.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <Label>Insurer ID (optional)</Label>
+                    <Input value={aiInsurerId} onChange={e => setAiInsurerId(e.target.value)} placeholder="Insurer ID (optional)" />
+                  </div>
+                  <div>
+                    <Label>Financial Statement (PDF)</Label>
+                    <input ref={fileInputRef} type="file" accept="application/pdf" />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex gap-2">
+                  <Button onClick={uploadAndSummarize} disabled={aiUploading}>
+                    {aiUploading ? 'Uploading & summarizing...' : 'Upload & Summarize'}
+                  </Button>
+                  <Button variant="outline" onClick={() => { setAiSummaryResult(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}>
+                    Clear
+                  </Button>
+                </div>
+
+                {aiUploading && <p className="text-sm text-muted-foreground mt-2">Please wait — summarization may take several seconds.</p>}
+
+                {aiSummaryResult && (
+                  <div className="mt-4 bg-gray-50 p-3 rounded border">
+                    {aiSummaryResult.error ? (
+                      <div className="text-red-600">Error: {aiSummaryResult.error}</div>
+                    ) : (
+                      <>
+                        <h6 className="font-semibold">Narrative</h6>
+                        <p className="whitespace-pre-wrap">{aiSummaryResult.summary?.narrative || 'No narrative'}</p>
+
+                        <h6 className="font-semibold mt-3">Metrics</h6>
+                        <pre className="text-xs bg-white p-2 rounded overflow-auto">{JSON.stringify(aiSummaryResult.summary?.metrics || {}, null, 2)}</pre>
+
+                        {aiSummaryResult.download_summary_url && (
+                          <div className="mt-3">
+                            <a href={aiSummaryResult.download_summary_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                              Download summary JSON
+                            </a>
+                          </div>
+                        )}
+
+                        {aiSummaryResult.download_summary_pdf_url && (
+                          <div className="mt-2">
+                            <a href={aiSummaryResult.download_summary_pdf_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                              Download summary PDF
+                            </a>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* Reviews */}
         <TabsContent value="reviews">
           <Card>
             <CardHeader>
@@ -1041,8 +1061,8 @@ export function AuditDashboardPage() {
                   </TableHeader>
                   <TableBody>
                     {reviews.map((review) => {
-                      const submission = submissions?.find(s => s.id === review.submissionId);
-                      const anonymizedId = submission ? `INS-${(submission.id.charCodeAt(submission.id.length - 1) % 5) + 101}` : 'Unknown';
+                      const submission = submissions?.find((s: any) => s.id === review.submissionId);
+                      const anonymizedId = submission ? `INS-${(String(submission.id).charCodeAt(String(submission.id).length - 1) % 5) + 101}` : 'Unknown';
                       return (
                         <TableRow key={review.id}>
                           <TableCell className="font-medium">
@@ -1080,6 +1100,7 @@ export function AuditDashboardPage() {
           </Card>
         </TabsContent>
 
+        {/* Risk Management */}
         <TabsContent value="risk-management">
           <div className="space-y-6">
             {/* Risk Overview Cards */}
@@ -1093,7 +1114,7 @@ export function AuditDashboardPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold text-red-600">
-                    {pendingSubmissions.filter(s => s.solvency_ratio < 100).length}
+                    {pendingSubmissions.filter(s => (s.solvency_ratio ?? 0) < 100).length}
                   </div>
                   <p className="text-sm text-muted-foreground">Below 100% solvency</p>
                 </CardContent>
@@ -1108,9 +1129,9 @@ export function AuditDashboardPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold text-orange-600">
-                    {pendingSubmissions.filter(s => 
+                    {pendingSubmissions.filter(s =>
                       !s.risk_assessment ||
-                      Object.values(s.risk_assessment).some(v => v === undefined || v === null || v === 0)
+                      Object.values(s.risk_assessment || {}).some((v: any) => v === undefined || v === null || v === 0)
                     ).length || 0}
                   </div>
                   <p className="text-sm text-muted-foreground">Awaiting ORSA review</p>
@@ -1153,19 +1174,19 @@ export function AuditDashboardPage() {
                   </TableHeader>
                   <TableBody>
                     {pendingSubmissions.map((submission) => {
-                      const riskLevel = submission.solvency_ratio >= 150 ? 'LOW' : 
-                                      submission.solvency_ratio >= 100 ? 'MEDIUM' : 'HIGH';
-                      const riskColor = riskLevel === 'HIGH' ? 'text-red-600' : 
-                                       riskLevel === 'MEDIUM' ? 'text-yellow-600' : 'text-green-600';
-                      
+                      const riskLevel = (submission.solvency_ratio ?? 0) >= 150 ? 'LOW' :
+                        (submission.solvency_ratio ?? 0) >= 100 ? 'MEDIUM' : 'HIGH';
+                      const riskColor = riskLevel === 'HIGH' ? 'text-red-600' :
+                        riskLevel === 'MEDIUM' ? 'text-yellow-600' : 'text-green-600';
+
                       return (
                         <TableRow key={submission.id}>
                           <TableCell className="font-medium">
                             {(submission.insurer && submission.insurer.username) || 'Unknown'}
                           </TableCell>
                           <TableCell>
-                            <span className={submission.solvency_ratio >= 100 ? 'text-green-600' : 'text-red-600'}>
-                              {submission.solvency_ratio}%
+                            <span className={((submission.solvency_ratio ?? 0) >= 100) ? 'text-green-600' : 'text-red-600'}>
+                              {submission.solvency_ratio ?? 'N/A'}%
                             </span>
                           </TableCell>
                           <TableCell>
@@ -1184,7 +1205,7 @@ export function AuditDashboardPage() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            <Button variant="outline" size="sm">
+                            <Button variant="outline" size="sm" onClick={() => { /* open risk review */ }}>
                               <Eye className="h-4 w-4 mr-2" />
                               Review Risk
                             </Button>
@@ -1199,84 +1220,6 @@ export function AuditDashboardPage() {
           </div>
         </TabsContent>
       </Tabs>
->>>>>>> 86c77f4 (added ai agent)
-
-                    {aiUploading && <p className="text-sm text-muted-foreground mt-2">Please wait — summarization may take several seconds.</p>}
-
-                    {aiSummaryResult && (
-                      <div className="mt-4 bg-gray-50 p-3 rounded border">
-                        {aiSummaryResult.error ? (
-                          <div className="text-red-600">Error: {aiSummaryResult.error}</div>
-                        ) : (
-                          <>
-                            <h6 className="font-semibold">Narrative</h6>
-                            <p className="whitespace-pre-wrap">{aiSummaryResult.summary?.narrative || 'No narrative'}</p>
-
-                            <h6 className="font-semibold mt-3">Metrics</h6>
-                            <pre className="text-xs bg-white p-2 rounded overflow-auto">{JSON.stringify(aiSummaryResult.summary?.metrics || {}, null, 2)}</pre>
-
-                            {aiSummaryResult.download_summary_url && (
-                              <div className="mt-3">
-                                <a href={aiSummaryResult.download_summary_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
-                                  Download summary JSON
-                                </a>
-                              </div>
-                            )}
-
-                            {aiSummaryResult.download_summary_pdf_url && (
-                              <div className="mt-2">
-                                <a href={aiSummaryResult.download_summary_pdf_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
-                                  Download summary PDF
-                                </a>
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-<<<<<<< HEAD
-            </TabsContent>
-          </Tabs>
-        </div>
-      ); // <-- This closes your AuditDashboardPage component
-    }
-=======
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Comments</Label>
-                <Textarea
-                  placeholder="Enter your review comments..."
-                  value={reviewComment}
-                  onChange={(e) => setReviewComment(e.target.value)}
-                  className="min-h-[100px]"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Additional Comments (Optional)</Label>
-                <Textarea
-                  placeholder="Any additional notes or observations..."
-                  value={additionalComment}
-                  onChange={(e) => setAdditionalComment(e.target.value)}
-                  className="min-h-[80px]"
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={handleCloseDialog}>
-                Cancel
-              </Button>
-              <Button 
-                onClick={handleSubmitReview}
-                disabled={!reviewComment.trim()}
-              >
-                Submit Review
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
     </div>
   );
 }
@@ -1305,4 +1248,4 @@ const dataInputSchema = z.object({
     </div>
   </div>
 </div>
->>>>>>> 86c77f4 (added ai agent)
+

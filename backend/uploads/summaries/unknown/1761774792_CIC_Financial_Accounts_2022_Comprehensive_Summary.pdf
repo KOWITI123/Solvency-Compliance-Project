@@ -1,0 +1,25 @@
+{
+  "document_title": "CIC_Financial_Accounts_2022_Comprehensive_Summary.pdf",
+  "narrative": "",
+  "metrics": {
+    "capital": 2615578.0,
+    "liabilities": 1210502.0,
+    "solvency_ratio": 216.07,
+    "auditors_unqualified_opinion": null,
+    "profit_before_tax": 2030169.0,
+    "gwp": null,
+    "ibnr_reserve_gross": null,
+    "net_claims_paid": 11666684.0,
+    "investment_income_total": 2055237.0,
+    "commission_expense_total": null,
+    "operating_expenses_total": null,
+    "contingency_reserve_statutory": 1441433.0,
+    "related_party_net_exposure": 466631.0
+  },
+  "recommendations": [],
+  "missing_items": [],
+  "confidence": null,
+  "raw_chunk_summaries": [
+    "{\"title\": \"CIC Insurance Group PLC - Comprehensive\", \"key_numbers\": {\"Capital\": 2615578.0, \"Liabilities\": 1210502.0, \"Net Claims Paid\": 11666684.0, \"Investment Income\": 2055237.0, \"Profit Before Tax\": 2030169.0, \"Contingency Reserve\": 1441433.0, \"Related Party Net Exposure\": 466631.0}, \"notes\": [\"Reference (Note/Page)\", \"Note 4(b), pg. 140–141\", \"Note 50, pg. 185–186\"], \"missing_items\": []}"
+  ]
+}

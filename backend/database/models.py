@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Enum, ForeignKey, Text, Boolean, Numeric
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Enum, ForeignKey, Text, Boolean, Numeric, JSON
 from sqlalchemy.orm import relationship
 from database.db_connection import db
 from datetime import datetime
@@ -95,6 +95,10 @@ class DataSubmission(db.Model):
     insurer_submitted_at = db.Column(DateTime, nullable=True)
     created_at = db.Column(DateTime, default=datetime.utcnow, nullable=True)
     updated_at = db.Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=True)
+    # Timestamps and comments from regulator actions
+    regulator_approved_at = Column(DateTime, nullable=True)
+    regulator_rejected_at = Column(DateTime, nullable=True)
+    regulator_comments = Column(Text, nullable=True)
 
     # Status of the submission (mapped to DB enum type `submissionstatus`)
     # Use SAEnum so SQLAlchemy will bind Python enum -> DB enum correctly.
@@ -119,6 +123,14 @@ class DataSubmission(db.Model):
     related_party_net_exposure = Column(Numeric, nullable=True)
     claims_development_method = Column(String(200), nullable=True)
     auditors_unqualified_opinion = Column(Boolean, nullable=True)
+
+    # --- AI extraction metadata & payload ---
+    ai_extraction = Column(JSON, nullable=True)               # raw normalized JSON extracted by AI
+    ai_extraction_raw = Column(Text, nullable=True)           # raw LLM chunk summaries / payload (if stored)
+    ai_model = Column(String(100), nullable=True)             # model id used (e.g. gemini-2.5-pro)
+    ai_confidence = Column(Float, nullable=True)              # optional confidence score
+    ai_extracted_at = Column(DateTime, nullable=True)         # timestamp when AI extraction ran
+    ai_used = Column(Boolean, default=False, nullable=False)  # whether AI values were applied to submission
 
     # relationship back to User (keep if not already present)
     insurer = relationship("User", back_populates="submissions")
