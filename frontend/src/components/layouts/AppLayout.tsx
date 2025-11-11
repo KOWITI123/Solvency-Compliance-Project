@@ -15,6 +15,10 @@ import {
   Shield,
   Settings,
   Smartphone,
+  Scale,
+  BarChart3,
+  ShieldAlert,
+  Building2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -32,10 +36,18 @@ const navItems: Record<UserRole, { href: string; label: string; icon: React.Elem
     { href: '/app/status', label: 'Compliance Status', icon: ShieldCheck },
     { href: '/app/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { href: '/app/blockchain-log', label: 'Blockchain Log', icon: Database },
+    { href: '/app/capital-solvency', label: 'Capital & Solvency', icon: Scale },
+    { href: '/app/insurance-performance', label: 'Insurance Performance', icon: BarChart3 },
+    { href: '/app/risk-management', label: 'Risk Management', icon: ShieldAlert },
+    { href: '/app/corporate-governance', label: 'Governance', icon: Building2 },
     { href: '/app/ussd-simulation', label: 'USSD Sim', icon: Smartphone },
   ],
   Regulator: [
     { href: '/app/audit', label: 'Audit Dashboard', icon: Shield },
+    { href: '/app/capital-solvency', label: 'Capital & Solvency', icon: Scale },
+    { href: '/app/insurance-performance', label: 'Insurance Performance', icon: BarChart3 },
+    { href: '/app/risk-management', label: 'Risk Management', icon: ShieldAlert },
+    { href: '/app/corporate-governance', label: 'Governance', icon: Building2 },
   ],
   Admin: [
     { href: '/app/admin', label: 'Admin Dashboard', icon: Settings },

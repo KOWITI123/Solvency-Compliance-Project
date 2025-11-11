@@ -9,12 +9,8 @@ from routes.submit_data import register_submission_routes
 print("🔧 DEBUG: submit_data routes imported successfully")
 
 from routes.regulator_routes import register_regulator_routes
-from routes.authentication import register_auth_routes
-from datetime import datetime
-import sys
-import traceback
-
-print("🔧 DEBUG: All imports completed")
+from routes.authentication import register_auth_routes  # ✅ Add this import
+from datetime import datetime  # ✅ Add this import
 
 app = Flask(__name__)
 # allow dev frontend to call API (temporarily permissive)
@@ -34,8 +30,7 @@ print("🔧 DEBUG: About to register routes...")
 register_submission_routes(app)
 print("🔧 DEBUG: Submission routes registered")
 register_regulator_routes(app)
-register_auth_routes(app)
-print("🔧 DEBUG: All routes registered")
+register_auth_routes(app)  # ✅ Add this line to register auth routes
 
 @app.route('/health', methods=['GET'])
 def health_check():

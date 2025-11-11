@@ -1,2 +1,6 @@
 myenv/
+<<<<<<< HEAD
 backend/.env
+=======
+.env
+>>>>>>> 47b9718b7a08d1b1317bbc7bce147677cb58075b
