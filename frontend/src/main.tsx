@@ -21,7 +21,7 @@ import { BlockchainLogPage } from '@/pages/BlockchainLogPage';
 import { AuditDashboardPage } from '@/pages/AuditDashboardPage';
 import { AdminDashboardPage } from '@/pages/AdminDashboardPage';
 import { UssdSimulationPage } from '@/pages/UssdSimulationPage';
-import { CapitalSolvencyPage } from '@/pages/CapitalSolvencyPage';
+import { CapitalSolvencyPage } from './pages/CapitalSolvencyPage';
 import { InsurancePerformancePage } from '@/pages/InsurancePerformancePage';
 import { RiskManagementPage } from '@/pages/RiskManagementPage';
 import { CorporateGovernancePage } from '@/pages/CorporateGovernancePage';

@@ -28,10 +28,25 @@ except Exception:
         _HAS_FPDF = False
 
 def register_regulator_routes(app):
-    """Register all regulator-related routes"""
-    
-    print("🏛️ Registering regulator routes...")
-    
+    """
+    Register regulator-related endpoints on the given Flask app.
+    Keeps existing functionality untouched and only adds the XBRL download route.
+    """
+    from flask import current_app, jsonify, send_file
+    import io
+
+    # import lazily to avoid circular imports at module import time
+    try:
+        from services.XBRLTransformService import generate_xbrl_bytes
+    except Exception:
+        generate_xbrl_bytes = None
+
+    try:
+        from database.models import db, DataSubmission
+    except Exception:
+        db = None
+        DataSubmission = None
+
     # Serve uploaded files by submission/insurer path (basic, dev-only)
     uploads_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'uploads'))
 
@@ -733,21 +748,224 @@ def register_regulator_routes(app):
         try:
             print(f"✅ Approving risk assessment: {assessment_id}")
             
+            # Try to load MaterialRisk by id first
             risk_assessment = MaterialRisk.query.get(assessment_id)
+
+            # If not found, try to interpret assessment_id as a submission id and find/create a fallback MaterialRisk
             if not risk_assessment:
-                return jsonify({'success': False, 'error': 'Risk assessment not found'}), 404
-            
-            # Update the review date
-            risk_assessment.last_reviewed = datetime.utcnow()
-            
-            db.session.commit()
-            
+                sub = None
+                try:
+                    sub = DataSubmission.query.get(assessment_id)
+                except Exception:
+                    sub = None
+
+                if sub:
+                    # try to find most-recent MaterialRisk for that insurer
+                    try:
+                        risk_assessment = MaterialRisk.query.filter_by(insurer_id=sub.insurer_id).order_by(MaterialRisk.created_at.desc()).first()
+                    except Exception:
+                        risk_assessment = None
+
+                    # Prefer a MaterialRisk already linked to this submission.
+                    try:
+                        risk_assessment = MaterialRisk.query.filter_by(submission_id=sub.id).first()
+                    except Exception:
+                        risk_assessment = None
+
+                    # If no risk is explicitly linked to this submission, create a new MaterialRisk
+                    # (do NOT reuse an arbitrary existing risk for a different submission).
+                    if not risk_assessment:
+                        try:
+                            # Local imports to avoid top-level coupling
+                            from database.models import RiskType, RiskLevel
+
+                            r = MaterialRisk(
+                                insurer_id=sub.insurer_id,
+                                submission_id=sub.id,
+                                risk_type=RiskType.UNDERWRITING,
+                                risk_title=f"Auto-created risk for submission {sub.id}",
+                                risk_description=(getattr(sub, 'risk_description', '') or f"Created from submission {sub.id}"),
+                                probability=1,
+                                financial_impact=0.0,
+                                risk_score=0.0,
+                                risk_level=RiskLevel.LOW,
+                                mitigation_measures='Auto-created fallback',
+                                risk_owner='system',
+                                review_date=datetime.utcnow().date(),
+                                last_reviewed=None,
+                                status='ACTIVE',
+                                created_at=datetime.utcnow(),
+                                updated_at=datetime.utcnow()
+                            )
+                            db.session.add(r)
+                            db.session.commit()
+                            risk_assessment = r
+                        except Exception as e:
+                            db.session.rollback()
+                            current_app.logger.exception("Failed to auto-create MaterialRisk")
+                            return jsonify({'success': False, 'error': 'Risk assessment not found and auto-create failed'}), 404
+                else:
+                    return jsonify({'success': False, 'error': 'Risk assessment not found'}), 404
+
+            # At this point we have a MaterialRisk (existing or auto-created) and possibly a linked submission
+            # If a submission exists, compute non-linear per-risk scores from solvency and persist them to submission.
+            try:
+                sub = None
+                if getattr(risk_assessment, 'submission_id', None):
+                    try:
+                        sub = DataSubmission.query.get(risk_assessment.submission_id)
+                    except Exception:
+                        sub = None
+
+                # as a fallback, if no linked submission but assessment_id corresponds to a submission, try that
+                if sub is None:
+                    try:
+                        maybe_sub = DataSubmission.query.get(assessment_id)
+                        if maybe_sub:
+                            sub = maybe_sub
+                    except Exception:
+                        pass
+
+                computed_scores = None
+                if sub is not None:
+                    # compute scores (same logic as /api/submissions/<id>/risk-scores)
+                    try:
+                        solv = getattr(sub, 'solvency_ratio', None)
+                        if solv is None:
+                            solv = getattr(sub, 'solvency', None)
+                        try:
+                            solvency = float(solv or 0.0)
+                        except Exception:
+                            solvency = 0.0
+
+                        stress_base = max(0.0, min(100.0, 100.0 - solvency))
+                        weights = {'underwriting': 0.40, 'market': 0.25, 'credit': 0.20, 'operational': 0.15}
+                        expo = 1.4
+                        raw = {k: (w ** expo) for k, w in weights.items()}
+                        total_raw = sum(raw.values()) or 1.0
+                        scores = {k: round((raw[k] / total_raw) * stress_base, 2) for k in raw}
+                        total = sum(scores.values())
+                        if abs(total - stress_base) >= 0.01:
+                            diff = round(stress_base - total, 2)
+                            scores['underwriting'] = round(scores.get('underwriting', 0) + diff, 2)
+
+                        computed_scores = {
+                            'underwriting': scores['underwriting'],
+                            'market': scores['market'],
+                            'credit': scores['credit'],
+                            'operational': scores['operational'],
+                            'solvency': round(solvency, 2),
+                            'stress_base': round(stress_base, 2)
+                        }
+
+                        # try to persist per-risk fields on DataSubmission if these attributes exist
+                        try:
+                            if hasattr(sub, 'underwriting_risk_score'):
+                                sub.underwriting_risk_score = float(scores['underwriting'])
+                            if hasattr(sub, 'market_risk_score'):
+                                sub.market_risk_score = float(scores['market'])
+                            if hasattr(sub, 'credit_risk_score'):
+                                sub.credit_risk_score = float(scores['credit'])
+                            if hasattr(sub, 'operational_risk_score'):
+                                sub.operational_risk_score = float(scores['operational'])
+                            if hasattr(sub, 'overall_risk_score'):
+                                sub.overall_risk_score = float(scores['underwriting'] + scores['market'] + scores['credit'] + scores['operational'])
+                        except Exception:
+                            # ignore persistence errors for optional columns
+                            pass
+
+                        # compute credit grade from credit_pct (higher = worse), then
+                        # enforce a minimum-worst grade based on overall stress_base (derived from solvency).
+                        credit_pct = float(scores.get('credit', 0.0))
+                        # base mapping (credit_pct -> grade) where lower pct => better grade
+                        if credit_pct <= 5:
+                            base_grade = 'A+'
+                        elif credit_pct <= 10:
+                            base_grade = 'A'
+                        elif credit_pct <= 20:
+                            base_grade = 'A-'
+                        elif credit_pct <= 30:
+                            base_grade = 'B'
+                        elif credit_pct <= 50:
+                            base_grade = 'C'
+                        else:
+                            base_grade = 'D'
+
+                        # overall stress_base (0..100): higher => worse
+                        stress_base_val = float(computed_scores.get('stress_base', 0.0)) if computed_scores else max(0.0, min(100.0, 100.0 - solvency))
+                        # map stress to a minimum-worst grade
+                        # stress >=70 => at least D, >=50 => at least C, >=30 => at least B, >=10 => at least A-, else A
+                        if stress_base_val >= 70:
+                            min_grade = 'D'
+                        elif stress_base_val >= 50:
+                            min_grade = 'C'
+                        elif stress_base_val >= 30:
+                            min_grade = 'B'
+                        elif stress_base_val >= 10:
+                            min_grade = 'A-'
+                        else:
+                            min_grade = 'A'
+
+                        # grade ordering from best -> worst
+                        grade_order = ['A+', 'A', 'A-', 'B', 'C', 'D']
+                        try:
+                            # pick the worse (higher index)
+                            final_grade = grade_order[max(grade_order.index(base_grade), grade_order.index(min_grade))]
+                        except Exception:
+                            final_grade = base_grade
+
+                        try:
+                            if hasattr(sub, 'credit_risk_grade'):
+                                sub.credit_risk_grade = final_grade
+                        except Exception:
+                            pass
+
+                        # persist submission changes (defensive)
+                        try:
+                            db.session.add(sub)
+                            db.session.commit()
+                        except Exception:
+                            try:
+                                db.session.rollback()
+                            except Exception:
+                                pass
+                    except Exception:
+                        current_app.logger.exception("Failed computing/persisting per-risk scores for submission")
+                        # continue — don't fail approval because of persistence issues
+
+                # update MaterialRisk.risk_score to be the overall stress_base (if model has field)
+                try:
+                    overall = (computed_scores and computed_scores.get('stress_base')) or 0.0
+                    risk_assessment.risk_score = float(overall)
+                except Exception:
+                    pass
+
+                # mark approved / last reviewed
+                try:
+                    risk_assessment.last_reviewed = datetime.utcnow()
+                    if hasattr(risk_assessment, 'review_status'):
+                        try: risk_assessment.review_status = 'REVIEWED'
+                        except Exception: pass
+                    db.session.add(risk_assessment)
+                    db.session.commit()
+                except Exception as e:
+                    db.session.rollback()
+                    current_app.logger.exception("Failed to approve risk assessment")
+                    return jsonify({'success': False, 'error': str(e)}), 500
+
+            except Exception:
+                # generic safety: ensure we don't leave transactions open
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
+
             return jsonify({
                 'success': True,
                 'message': 'Risk assessment approved',
-                'assessment_id': assessment_id
+                'assessment_id': getattr(risk_assessment, 'id', assessment_id)
             }), 200
-            
+
         except Exception as e:
             db.session.rollback()
             print(f"❌ Error approving risk assessment: {str(e)}")
@@ -934,5 +1152,212 @@ def register_regulator_routes(app):
                 pass
             return []
 
+    @app.route('/api/regulator/xbrl/<int:submission_id>', methods=['GET'])
+    def regulator_download_xbrl(submission_id: int):
+        """Generate XBRL on-the-fly for a submission and stream it as a download."""
+        if generate_xbrl_bytes is None or db is None or DataSubmission is None:
+            current_app.logger.error("XBRL generator or DB models not available")
+            return jsonify({'success': False, 'error': 'Server not configured for XBRL generation'}), 500
+
+        try:
+            # SQLAlchemy 2.0-style session.get if available, fallback to query.get
+            sub = None
+            try:
+                sub = db.session.get(DataSubmission, submission_id)
+            except Exception:
+                sub = DataSubmission.query.get(submission_id)
+
+            if sub is None:
+                return jsonify({'success': False, 'error': 'Submission not found'}), 404
+
+            filename, payload = generate_xbrl_bytes(sub)
+            bio = io.BytesIO(payload)
+            bio.seek(0)
+            return send_file(
+                bio,
+                mimetype='application/xml',
+                as_attachment=True,
+                download_name=filename
+            )
+        except Exception as e:
+            current_app.logger.exception("Failed generating XBRL")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     print("✅ Regulator routes registered successfully")
+
+    @app.route('/api/submissions/<int:submission_id>/risk-scores', methods=['GET'])
+    def submission_risk_scores(submission_id: int):
+        """
+        Compute risk score percentages from a DataSubmission's solvency_ratio.
+        Defensive: tolerates missing DB/models and works with SQLAlchemy query or session.get.
+        """
+        try:
+            from database.models import db, DataSubmission
+        except Exception:
+            return jsonify({'success': False, 'error': 'DB models not available'}), 500
+
+        try:
+            # load submission defensively
+            sub = None
+            try:
+                sub = db.session.get(DataSubmission, submission_id)
+            except Exception:
+                try:
+                    sub = DataSubmission.query.get(submission_id)
+                except Exception:
+                    sub = None
+
+            if sub is None:
+                return jsonify({'success': False, 'error': 'Submission not found'}), 404
+
+            solv = getattr(sub, 'solvency_ratio', None)
+            if solv is None:
+                solv = getattr(sub, 'solvency', None)
+            try:
+                solvency = float(solv or 0.0)
+            except Exception:
+                solvency = 0.0
+
+            # Non-linear mapping: compute stress_base then apply exponentiation to weight
+            # so larger-weight risks are emphasized non-linearly.
+            stress_base = max(0.0, min(100.0, 100.0 - solvency))
+            
+            # base linear weights (adjustable)
+            weights = {
+                'underwriting': 0.40,
+                'market': 0.25,
+                'credit': 0.20,
+                'operational': 0.15
+            }
+            
+            # exponent controls non-linearity (>=1). Higher => emphasize larger weights more.
+            # Allow optional ?expo=1.5 query param to tune without code changes.
+            try:
+                expo = float(request.args.get('expo', 1.4))
+                if expo < 1.0:
+                    expo = 1.0
+            except Exception:
+                expo = 1.4
+            
+            # apply exponent to weights and normalize so sum == 1, then scale by stress_base
+            raw = {k: (w ** expo) for k, w in weights.items()}
+            total_raw = sum(raw.values()) or 1.0
+            scores = {k: round((raw[k] / total_raw) * stress_base, 2) for k in raw}
+            
+            # numerical safety: ensure sum(scores) == stress_base (adjust underwriting)
+            total = sum(scores.values())
+            if abs(total - stress_base) >= 0.01:
+                diff = round(stress_base - total, 2)
+                scores['underwriting'] = round(scores.get('underwriting', 0) + diff, 2)
+
+            return jsonify({'success': True, 'scores': {
+                'underwriting': scores['underwriting'],
+                'market': scores['market'],
+                'credit': scores['credit'],
+                'operational': scores['operational'],
+                'solvency': round(solvency, 2)
+            }}), 200
+        except Exception as e:
+            current_app.logger.exception("Error computing risk scores")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/insurer/<int:insurer_id>/risks', methods=['GET'])
+    def insurer_get_risks(insurer_id: int):
+        """Return active material risks for a specific insurer (read-only).
+           Enrich each risk with linked submission credit_score and credit_grade when available.
+        """
+        try:
+            risks = MaterialRisk.query.filter_by(insurer_id=insurer_id).order_by(MaterialRisk.risk_score.desc()).all()
+            out = []
+            for r in risks:
+                credit_score = None
+                credit_grade = None
+                try:
+                    sub = None
+                    if getattr(r, 'submission_id', None):
+                        try:
+                            sub = DataSubmission.query.get(r.submission_id)
+                        except Exception:
+                            sub = None
+
+                    if sub:
+                        # prefer explicit stored credit score
+                        if hasattr(sub, 'credit_risk_score') and sub.credit_risk_score is not None:
+                            credit_score = float(sub.credit_risk_score)
+                        else:
+                            # compute from submission solvency using the same server formula
+                            try:
+                                solv = getattr(sub, 'solvency_ratio', None) or getattr(sub, 'solvency', None) or 0.0
+                                solvency = float(solv)
+                                stress_base = max(0.0, min(100.0, 100.0 - solvency))
+                                weights = {'underwriting': 0.40, 'market': 0.25, 'credit': 0.20, 'operational': 0.15}
+                                expo = 1.4
+                                raw = {k: (w ** expo) for k, w in weights.items()}
+                                total_raw = sum(raw.values()) or 1.0
+                                scores = {k: round((raw[k] / total_raw) * stress_base, 2) for k in raw}
+                                credit_score = float(scores.get('credit', 0.0))
+                            except Exception:
+                                credit_score = None
+
+                        # compute grade if we have a credit_score (and factor in overall stress)
+                        if credit_score is not None:
+                            # base grade from credit_score
+                            if credit_score <= 5:
+                                base_grade = 'A+'
+                            elif credit_score <= 10:
+                                base_grade = 'A'
+                            elif credit_score <= 20:
+                                base_grade = 'A-'
+                            elif credit_score <= 30:
+                                base_grade = 'B'
+                            elif credit_score <= 50:
+                                base_grade = 'C'
+                            else:
+                                base_grade = 'D'
+
+                            # compute stress_base from linked submission solvency (if available)
+                            try:
+                                solv_for_grade = float(getattr(sub, 'solvency_ratio', None) or getattr(sub, 'solvency', 0.0))
+                            except Exception:
+                                solv_for_grade = 0.0
+                            stress_base_val = max(0.0, min(100.0, 100.0 - solv_for_grade))
+
+                            if stress_base_val >= 70:
+                                min_grade = 'D'
+                            elif stress_base_val >= 50:
+                                min_grade = 'C'
+                            elif stress_base_val >= 30:
+                                min_grade = 'B'
+                            elif stress_base_val >= 10:
+                                min_grade = 'A-'
+                            else:
+                                min_grade = 'A'
+
+                            grade_order = ['A+', 'A', 'A-', 'B', 'C', 'D']
+                            try:
+                                credit_grade = grade_order[max(grade_order.index(base_grade), grade_order.index(min_grade))]
+                            except Exception:
+                                credit_grade = base_grade
+                except Exception:
+                    current_app.logger.exception("Error enriching risk with submission scores")
+
+                out.append({
+                    'id': r.id,
+                    'insurer_id': r.insurer_id,
+                    'risk_title': getattr(r, 'risk_title', None),
+                    'risk_description': getattr(r, 'risk_description', None),
+                    'risk_score': float(getattr(r, 'risk_score', 0) or 0),
+                    'risk_level': getattr(r, 'risk_level', None).value if hasattr(getattr(r, 'risk_level', None), 'value') else str(getattr(r, 'risk_level', None)),
+                    'probability': getattr(r, 'probability', None),
+                    'financial_impact': float(getattr(r, 'financial_impact', 0) or 0),
+                    'mitigation_measures': getattr(r, 'mitigation_measures', None),
+                    'last_reviewed': getattr(r, 'last_reviewed', None).isoformat() if getattr(r, 'last_reviewed', None) else None,
+                    'status': getattr(r, 'status', None),
+                    'credit_score': credit_score,
+                    'credit_grade': credit_grade
+                })
+            return jsonify({'success': True, 'risks': out}), 200
+        except Exception as e:
+            current_app.logger.exception("Error fetching insurer risks")
+            return jsonify({'success': False, 'error': str(e), 'risks': []}), 500
 

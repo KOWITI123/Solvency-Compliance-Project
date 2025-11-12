@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useSubmissions, useLatestComplianceStatus } from '@/stores/dataStore';
 import { useAuthStore } from '@/stores/authStore';
@@ -19,9 +19,42 @@ import {
 import { format } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { toast } from 'sonner';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 // ✅ ADD: Missing import
 import { RefreshCw } from 'lucide-react';
+// Lightweight local toast fallback to avoid depending on 'react-hot-toast' in this repo.
+// This provides the same .success/.error/.warning API used in this file.
+// It logs to the console and uses alert for error/warning so user sees important messages.
+// Replace with your preferred toast library later if desired.
+const toast: any = {
+  success: (msg: any, opts?: any) => {
+    try {
+      console.info('Toast success:', msg, opts);
+    } catch (e) {
+      /* ignore */
+    }
+  },
+  error: (msg: any, opts?: any) => {
+    try {
+      console.error('Toast error:', msg, opts);
+      if (typeof window !== 'undefined') {
+        alert(typeof msg === 'string' ? msg : (opts?.description || JSON.stringify(msg)));
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  },
+  warning: (msg: any, opts?: any) => {
+    try {
+      console.warn('Toast warning:', msg, opts);
+      if (typeof window !== 'undefined') {
+        alert(typeof msg === 'string' ? msg : (opts?.description || JSON.stringify(msg)));
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+};
 
 const COLORS = {
   compliant: 'hsl(var(--chart-2))',
@@ -41,6 +74,10 @@ export function InsurerDashboardPage() {
   const [comments, setComments] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [submissionHistory, setSubmissionHistory] = useState<any[]>([]);
+
+  // Material risks state for insurer dashboard
+  const [materialRisks, setMaterialRisks] = useState<any[]>([]);
+  const [risksLoading, setRisksLoading] = useState(false);
 
   // ✅ REVERT: Use the original working endpoint
   const fetchSubmissionHistory = useCallback(async () => {
@@ -288,6 +325,86 @@ if (data.success && data.submissions) {
       });
     }
   };
+
+  const creditScoreToGrade = (score: number) => {
+    // score: percentage where higher = greater credit risk exposure
+    // Lower score => better credit rating. Tunable thresholds:
+    if (score <= 5) return 'A+';
+    if (score <= 10) return 'A';
+    if (score <= 20) return 'A-';
+    if (score <= 30) return 'B';
+    if (score <= 50) return 'C';
+    return 'D';
+  };
+
+  const fetchMaterialRisks = useCallback(async () => {
+    try {
+      // Prefer authenticated user id from auth store; fallback to localStorage for legacy sessions
+      const currentUserLS = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      const userId = user?.id ?? (user as any)?.userId ?? currentUserLS.id;
+      if (!userId) {
+        console.warn('InsurerDashboard: no user id available to fetch risks');
+        setMaterialRisks([]);
+        return;
+      }
+      setRisksLoading(true);
+      const resp = await fetch(`http://localhost:5000/api/insurer/${userId}/risks`);
+      if (!resp.ok) {
+        console.warn('InsurerDashboard: fetch risks returned non-ok', resp.status);
+        setMaterialRisks([]);
+        return;
+      }
+      const data = await resp.json();
+      setMaterialRisks(data.risks || []);
+      console.debug('InsurerDashboard: fetched material risks', (data.risks || []).length);
+    } catch (e) {
+      console.error('Failed fetching insurer risks', e);
+      setMaterialRisks([]);
+    } finally {
+      setRisksLoading(false);
+    }
+  }, [user]);
+ 
+   useEffect(() => {
+     // initial load
+     fetchMaterialRisks();
+    // listen for in-page event
+    const handler = () => { fetchMaterialRisks(); };
+    window.addEventListener('risks-updated', handler);
+
+    // listen for cross-tab storage events
+    const storageHandler = (ev: StorageEvent) => {
+      if (ev.key === 'risks-updated') fetchMaterialRisks();
+    };
+    window.addEventListener('storage', storageHandler);
+
+    // listen for BroadcastChannel messages (if available)
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('risks-channel');
+      bc.onmessage = (m) => {
+        try {
+          if (!m || !m.data) return;
+          // optionally inspect m.data.insurer_id to filter
+          fetchMaterialRisks();
+        } catch (e: any) {
+          // Log handler errors to help debugging without interrupting the UI.
+          console.error('InsurerDashboard: error in BroadcastChannel onmessage handler', e);
+        }
+      };
+    } catch (e: any) {
+      // BroadcastChannel may be unavailable (SSR or older browsers) — log and continue.
+      console.warn('InsurerDashboard: BroadcastChannel not available or failed to initialize', e);
+    }
+
+    return () => {
+      window.removeEventListener('risks-updated', handler);
+      window.removeEventListener('storage', storageHandler);
+      if (bc) {
+        try { bc.close(); } catch (e) { console.warn('InsurerDashboard: failed to close BroadcastChannel', e); }
+      }
+    };
+   }, [fetchMaterialRisks, user]);
 
   return (
     <div className="space-y-8">
@@ -603,6 +720,51 @@ if (data.success && data.submissions) {
               <div className="text-sm text-muted-foreground">Rejected Submissions</div>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Material Risks section (new, read-only) */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Material Risks</CardTitle>
+          <CardDescription>Active material risks for your company</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {risksLoading ? (
+            <div>Loading risks...</div>
+          ) : materialRisks.length === 0 ? (
+            <div className="text-sm text-muted-foreground">No active risks recorded.</div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Risk</TableHead>
+                  <TableHead>Score (%)</TableHead>
+                  <TableHead>Credit Grade</TableHead>
+                  <TableHead>Last Reviewed</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {materialRisks.map((r) => {
+                  const score = Number(r.risk_score || 0);
+                  // Prefer server-provided credit_grade if available, otherwise compute locally
+                  const grade = (r.credit_grade && String(r.credit_grade).trim()) ? String(r.credit_grade) : creditScoreToGrade(score);
+                   return (
+                     <TableRow key={r.id}>
+                      <TableCell className="font-medium">{r.risk_title || 'Untitled risk'}</TableCell>
+                      <TableCell>{score.toFixed(2)}%</TableCell>
+                      <TableCell>
+                        <Badge className={(grade || '').startsWith('A') ? 'bg-green-100 text-green-800' : grade === 'B' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}>
+                          {grade}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{r.last_reviewed || 'N/A'}</TableCell>
+                     </TableRow>
+                   );
+                 })}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>

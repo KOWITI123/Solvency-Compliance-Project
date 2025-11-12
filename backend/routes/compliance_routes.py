@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from database.db_connection import db
 from database.compliance_models import (
     CapitalSolvencyMetric,
@@ -7,8 +7,13 @@ from database.compliance_models import (
     CorporateGovernanceMetric
 )
 from datetime import datetime, date
+from services.metrics_service import get_insurance_performance
 
 def register_compliance_routes(app):
+    """
+    Register compliance endpoints on the provided Flask app.
+    Call this from app.py when you are ready. No automatic registration is performed.
+    """
 
     @app.route('/api/compliance/capital-solvency/<int:user_id>', methods=['GET'])
     def get_capital_solvency(user_id):
@@ -47,39 +52,12 @@ def register_compliance_routes(app):
             return jsonify({'success': False, 'error': str(e)}), 500
 
     @app.route('/api/compliance/insurance-performance/<int:user_id>', methods=['GET'])
-    def get_insurance_performance(user_id):
+    def compliance_insurance_performance(user_id):
         try:
-            metric = InsurancePerformanceMetric.query.filter_by(user_id=user_id).order_by(
-                InsurancePerformanceMetric.as_of_date.desc()
-            ).first()
-
-            if not metric:
-                return jsonify({
-                    'success': True,
-                    'metrics': {
-                        'insuranceServiceResult': 681690000,
-                        'insuranceRevenue': 17460597000,
-                        'previousYearRevenue': 16724384000,
-                        'insuranceRevenueGrowth': 4.4,
-                        'liabilityAdequacy': 'Adequate',
-                        'asOfDate': datetime.now().isoformat()
-                    }
-                }), 200
-
-            return jsonify({
-                'success': True,
-                'metrics': {
-                    'insuranceServiceResult': metric.insurance_service_result,
-                    'insuranceRevenue': metric.insurance_revenue,
-                    'previousYearRevenue': metric.previous_year_revenue,
-                    'insuranceRevenueGrowth': metric.insurance_revenue_growth,
-                    'liabilityAdequacy': metric.liability_adequacy,
-                    'asOfDate': metric.as_of_date.isoformat()
-                }
-            }), 200
-
+            metrics = get_insurance_performance(user_id, db_models)
+            return jsonify({'success': True, 'metrics': metrics}), 200
         except Exception as e:
-            print(f"Error fetching insurance performance metrics: {str(e)}")
+            current_app.logger.exception("Error building insurance-performance metrics")
             return jsonify({'success': False, 'error': str(e)}), 500
 
     @app.route('/api/compliance/risk-management/<int:user_id>', methods=['GET'])
@@ -265,4 +243,74 @@ def register_compliance_routes(app):
         except Exception as e:
             db.session.rollback()
             print(f"Error seeding compliance data: {str(e)}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/submissions/<int:submission_id>/risk-scores', methods=['GET'])
+    def submission_risk_scores(submission_id: int):
+        """
+        Compute risk score percentages from a DataSubmission's solvency_ratio.
+        Returns:
+          { success: true, scores: { underwriting, market, credit, operational, solvency } }
+        Defensive: tolerates missing DB or fields.
+        """
+        try:
+            # lazy import DB models
+            from database.models import db, DataSubmission
+        except Exception:
+            return jsonify({'success': False, 'error': 'DB models not available'}), 500
+
+        try:
+            # load submission safely (works with various SQLAlchemy setups)
+            sub = None
+            try:
+                sub = DataSubmission.query.get(submission_id)
+            except Exception:
+                try:
+                    sub = db.session.get(DataSubmission, submission_id)
+                except Exception:
+                    sub = None
+
+            if sub is None:
+                return jsonify({'success': False, 'error': 'Submission not found'}), 404
+
+            # get solvency ratio (handle different field names)
+            solv = getattr(sub, 'solvency_ratio', None)
+            if solv is None:
+                solv = getattr(sub, 'solvency', None)
+            try:
+                solvency = float(solv or 0.0)
+            except Exception:
+                solvency = 0.0
+
+            # Basic mapping: the larger (100 - solvency), the larger the risk exposure.
+            stress_base = max(0.0, min(100.0, 100.0 - solvency))
+
+            # weights (can be adjusted)
+            weights = {
+                'underwriting': 0.40,
+                'market': 0.25,
+                'credit': 0.20,
+                'operational': 0.15
+            }
+
+            scores = {}
+            for k, w in weights.items():
+                # raw proportion of stress_base
+                scores[k] = round(stress_base * w, 2)
+
+            # Ensure small rounding adjustments keep totals sensible
+            total = sum(scores.values())
+            # If due to floating rounding total != stress_base, adjust underwriting to compensate
+            if abs(total - stress_base) >= 0.01:
+                scores['underwriting'] = round(scores['underwriting'] + (stress_base - total), 2)
+
+            return jsonify({'success': True, 'scores': {
+                'underwriting': scores['underwriting'],
+                'market': scores['market'],
+                'credit': scores['credit'],
+                'operational': scores['operational'],
+                'solvency': round(solvency, 2)
+            }}), 200
+        except Exception as e:
+            current_app.logger.exception("Error computing risk scores")
             return jsonify({'success': False, 'error': str(e)}), 500

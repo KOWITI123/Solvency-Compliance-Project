@@ -76,10 +76,17 @@ interface PendingSubmission {
   claims_development_method?: string;
   auditors_unqualified_opinion?: boolean | null;
   risk_assessment?: {
+    // optional identifiers so the UI can reference/approve specific assessments
+    id?: number | string;
+    assessment_id?: number | string;
     underwriting_risk?: number;
     market_risk?: number;
     credit_risk?: number;
     operational_risk?: number;
+    // optional textual fields used in the UI (mitigation plan, notes, comments)
+    mitigation?: string;
+    notes?: string;
+    comment?: string;
   };
   orsa_status?: string;
   last_stress_test?: string;
@@ -126,6 +133,15 @@ export function AuditDashboardPage() {
   const [aiSummaryResult, setAiSummaryResult] = useState<any | null>(null);
   const [riskAssessments, setRiskAssessments] = useState<any[]>([]);
   const [stressTests, setStressTests] = useState<any[]>([]);
+  // Selected risk for the "Review Risk" modal
+  const [selectedRiskForReview, setSelectedRiskForReview] = useState<PendingSubmission | null>(null);
+  const [isRiskModalOpen, setIsRiskModalOpen] = useState(false);
+  // computed scores fetched from backend (solvency -> percentages)
+  const [selectedRiskScores, setSelectedRiskScores] = useState<null | {
+    underwriting: number; market: number; credit: number; operational: number; solvency: number;
+  }>(null);
+  const [selectedRiskScoresLoading, setSelectedRiskScoresLoading] = useState(false);
+  const [selectedRiskScoresError, setSelectedRiskScoresError] = useState<string | null>(null);
 
   // Existing filters
   const [insurerIdFilter, setInsurerIdFilter] = useState('all');
@@ -304,20 +320,196 @@ export function AuditDashboardPage() {
   };
 
   const approveRiskAssessment = async (assessmentId: number) => {
+    setIsApproving(true);
     try {
       const response = await fetch(`http://localhost:5000/api/regulator/approve-risk/${assessmentId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
 
-      if (response.ok) {
-        toast.success('Risk assessment approved');
-        fetchRiskAssessments();
-      } else {
+      if (!response.ok) {
         toast.error('Failed to approve risk assessment');
+        return;
+      }
+
+      toast.success('Risk assessment approved');
+      // refresh risk lists
+      fetchRiskAssessments();
+
+      // If we have the selected submission, also mark the submission as approved on the server.
+      // This ensures pending-submissions endpoint stops returning it on periodic refresh.
+      try {
+        const sel = selectedRiskForReview;
+        const selSubmissionId = (sel as any)?.id ?? (sel as any)?.submission_id ?? (sel as any)?.submissionId;
+        if (selSubmissionId) {
+          const resp2 = await fetch('http://localhost:5000/api/regulator/approve-submission', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ submission_id: selSubmissionId, comments: 'Approved via risk assessment' })
+          });
+          if (resp2.ok) {
+            // keep server and UI in sync
+            fetchPendingSubmissions();
+          } else {
+            console.debug('approve-submission returned non-ok', resp2.status);
+          }
+        } else {
+          fetchPendingSubmissions();
+        }
+      } catch (err) {
+        console.debug('Failed to mark submission approved on server, still removing locally', err);
+        fetchPendingSubmissions();
+      }
+
+      // Remove approved item locally so it's cleared immediately from the UI
+      try {
+        const sel = selectedRiskForReview;
+        const selSubmissionId = (sel as any)?.id ?? (sel as any)?.submission_id ?? (sel as any)?.submissionId;
+        setPendingSubmissions(prev =>
+          prev.filter(s => {
+            const sId = (s as any).id ?? (s as any).submission_id ?? (s as any).submissionId;
+            if (selSubmissionId && String(sId) === String(selSubmissionId)) return false;
+            const ra = (s as any).risk_assessment || {};
+            if (ra && (String(ra.id) === String(assessmentId) || String(ra.assessment_id) === String(assessmentId))) return false;
+            return true;
+          })
+        );
+
+        setRiskAssessments(prev =>
+          prev.filter(r => {
+            if (!r) return false;
+            if (String((r as any).id) === String(assessmentId)) return false;
+            if (selSubmissionId && String((r as any).submission_id) === String(selSubmissionId)) return false;
+            return true;
+          })
+        );
+      } catch (e) {
+        console.debug('Failed to update local lists after approval', e);
+      }
+
+      // close risk review modal
+      setIsRiskModalOpen(false);
+      setSelectedRiskForReview(null);
+
+      // notify other pages (insurer dashboard) to refresh risks
+      try {
+        window.dispatchEvent(new Event('risks-updated'));
+        localStorage.setItem('risks-updated', String(Date.now()));
+        try {
+          const bc = new BroadcastChannel('risks-channel');
+          bc.postMessage({ type: 'risks-updated', ts: Date.now(), insurer_username: selectedRiskForReview?.insurer?.username });
+          bc.close();
+        } catch (err) {
+          console.debug('BroadcastChannel postMessage failed or is unavailable:', err);
+        }
+      } catch (err) {
+        console.debug('Failed to notify other parts of the app about risk updates:', err);
       }
     } catch (error) {
       toast.error('Failed to approve risk assessment');
+      console.error('approveRiskAssessment error', error);
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  const openRiskReview = (submission: PendingSubmission) => {
+    setSelectedRiskForReview(submission);
+    setSelectedRiskScores(null);
+    setSelectedRiskScoresError(null);
+    setSelectedRiskScoresLoading(true);
+    setIsRiskModalOpen(true);
+
+    // Build list of plausible id fields to try (some backends return different casing)
+    const idCandidates = Array.from(new Set([
+      submission.id,
+      (submission as any).submissionId,
+      (submission as any).submission_id,
+      (submission as any).submission?.id,
+      (submission as any).data_hash, // unlikely but harmless
+    ])).filter(Boolean);
+
+    const hosts = [
+      'http://localhost:5000', // consistent with other calls
+      window.location.origin.replace(/\/$/, '') // fallback to same origin
+    ];
+
+    (async () => {
+      let lastErr: string | null = null;
+      let success = false;
+      for (const idCandidate of idCandidates.length ? idCandidates : [submission.id]) {
+        for (const host of hosts) {
+          const url = `${host}/api/submissions/${idCandidate}/risk-scores`;
+          try {
+            const resp = await fetch(url);
+            if (!resp.ok) {
+              const body = await resp.json().catch(() => ({}));
+              lastErr = body.error || `HTTP ${resp.status}`;
+              // try next host/id
+              continue;
+            }
+            const data = await resp.json().catch(() => null);
+            if (data && data.success && data.scores) {
+              const s = data.scores;
+              setSelectedRiskScores({
+                underwriting: Number(s.underwriting || 0),
+                market: Number(s.market || 0),
+                credit: Number(s.credit || 0),
+                operational: Number(s.operational || 0),
+                solvency: Number(s.solvency || 0)
+              });
+              success = true;
+              break;
+            } else {
+              lastErr = 'No scores returned';
+            }
+          } catch (err: any) {
+            lastErr = err?.message || 'Fetch failed';
+            continue;
+          }
+        }
+        if (success) break;
+      }
+
+      if (!success) {
+        setSelectedRiskScoresError(lastErr || 'Not Found');
+      }
+      setSelectedRiskScoresLoading(false);
+    })();
+  };
+
+  const closeRiskReview = () => {
+    setSelectedRiskForReview(null);
+    setIsRiskModalOpen(false);
+  };
+
+  // download XBRL on demand (no server storage)
+  const downloadXbrl = async (submissionId: number | string) => {
+    try {
+      const resp = await fetch(`http://localhost:5000/api/regulator/xbrl/${submissionId}`, {
+        method: 'GET'
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        toast.error('Failed to generate XBRL', { description: err.error || 'Server error' });
+        return;
+      }
+      const blob = await resp.blob();
+      const cd = resp.headers.get('content-disposition') || '';
+      const filenameMatch = cd.match(/filename\*=UTF-8''(.+)|filename="?([^"]+)"?/);
+      const filename = filenameMatch ? (filenameMatch[1] || filenameMatch[2]) : `submission-${submissionId}.xbrl`;
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('XBRL generated');
+    } catch (err) {
+      console.error('Download XBRL error', err);
+      toast.error('Failed to download XBRL');
     }
   };
 
@@ -941,6 +1133,13 @@ export function AuditDashboardPage() {
                                   </div>
                                   <DialogFooter className="sticky bottom-0 bg-white/90 mt-4 pt-2">
                                     <Button
+                                      variant="outline"
+                                      onClick={() => selectedPendingSubmission && downloadXbrl(selectedPendingSubmission.id)}
+                                    >
+                                      <Download className="h-4 w-4 mr-2" />
+                                      Download XBRL
+                                    </Button>
+                                    <Button
                                       variant="destructive"
                                       onClick={rejectSubmission}
                                       disabled={isRejecting}
@@ -1196,7 +1395,13 @@ export function AuditDashboardPage() {
                           </TableCell>
                           <TableCell>
                             <Badge variant="outline">
-                              {submission.orsa_status || 'PENDING'}
+                              {(() => {
+                                // Compute ORSA status: prefer explicit orsa_status, otherwise mark COMPLETE if stress test present
+                                const explicit = submission.orsa_status;
+                                if (explicit && String(explicit).trim() !== '') return explicit;
+                                if (submission.stress_test_complete || submission.last_stress_test) return 'COMPLETE';
+                                return 'PENDING';
+                              })()}
                             </Badge>
                           </TableCell>
                           <TableCell>
@@ -1205,7 +1410,7 @@ export function AuditDashboardPage() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            <Button variant="outline" size="sm" onClick={() => { /* open risk review */ }}>
+                            <Button variant="outline" size="sm" onClick={() => openRiskReview(submission)}>
                               <Eye className="h-4 w-4 mr-2" />
                               Review Risk
                             </Button>
@@ -1220,32 +1425,153 @@ export function AuditDashboardPage() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Risk Review Modal */}
+      <Dialog open={isRiskModalOpen} onOpenChange={(o) => setIsRiskModalOpen(Boolean(o))}>
+        <DialogContent>
+          {/* Constrain height and allow vertical scrolling for long content */}
+          <div className="max-h-[75vh] w-full overflow-y-auto pr-2">
+            <DialogHeader>
+              <DialogTitle>Risk Review</DialogTitle>
+              <DialogDescription>Review the insurer's risk assessment and approve if satisfactory.</DialogDescription>
+            </DialogHeader>
+            {selectedRiskForReview ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-sm text-muted-foreground">Insurer</div>
+                    <div className="font-medium">{(selectedRiskForReview.insurer && selectedRiskForReview.insurer.username) || 'Unknown'}</div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-muted-foreground">Solvency Ratio</div>
+                    <div className={`font-bold ${((selectedRiskForReview.solvency_ratio ?? 0) >= 100) ? 'text-green-600' : 'text-red-600'}`}>
+                      {(selectedRiskForReview.solvency_ratio ?? 'N/A')}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* Risk metric cards */}
+                {(() => {
+                  // Prefer server-computed scores; otherwise fall back to local values.
+                  const scores = selectedRiskScores;
+                  const ra = selectedRiskForReview.risk_assessment || {};
+                  const u = scores ? Number(scores.underwriting || 0) : (Number(ra.underwriting_risk ?? 0) || 0);
+                  const m = scores ? Number(scores.market || 0) : (Number(ra.market_risk ?? 0) || 0);
+                  const c = scores ? Number(scores.credit || 0) : (Number(ra.credit_risk ?? 0) || 0);
+                  const o = scores ? Number(scores.operational || 0) : (Number(ra.operational_risk ?? 0) || 0);
+
+                  const metricRow = (label: string, value: number) => {
+                    const val = Number(isFinite(value) ? value : 0);
+                    const pct = Math.max(0, Math.min(100, val));
+
+                    // Severity buckets (easy to gauge)
+                    // 0-9%   = Low (green)
+                    // 10-29% = Moderate (teal/yellow)
+                    // 30-49% = Elevated (amber/orange)
+                    // 50-69% = High (orange/red)
+                    // 70-100 = Critical (red)
+                    let severity = 'Low';
+                    let barColor = 'bg-green-600';
+                    if (pct >= 70) { severity = 'Critical'; barColor = 'bg-red-600'; }
+                    else if (pct >= 50) { severity = 'High'; barColor = 'bg-orange-600'; }
+                    else if (pct >= 30) { severity = 'Elevated'; barColor = 'bg-yellow-500'; }
+                    else if (pct >= 10) { severity = 'Moderate'; barColor = 'bg-teal-500'; }
+
+                    return (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-sm">
+                          <div className="flex items-center gap-2">
+                            <div className={`h-2 w-2 rounded-full ${barColor}`} />
+                            <div className="font-medium">{label}</div>
+                          </div>
+                          <div className="text-xs text-muted-foreground">{(pct).toFixed(1)}%</div>
+                        </div>
+                        <div className="w-full bg-gray-200 h-3 rounded overflow-hidden">
+                          <div className={`${barColor} h-3`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <div className="text-xs text-muted-foreground">{severity}</div>
+                      </div>
+                    );
+                  };
+
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-sm">Top Risk Scores</CardTitle>
+                          <CardDescription className="text-xs">Higher % = greater risk exposure</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {selectedRiskScoresLoading && <div>Loading scores…</div>}
+                          {metricRow('Underwriting Risk', u)}
+                          {metricRow('Market Risk', m)}
+                          {metricRow('Credit Risk', c)}
+                          {metricRow('Operational Risk', o)}
+                          {selectedRiskScores && (
+                            <div className="text-xs text-muted-foreground mt-2">(Scores computed from solvency ratio: {selectedRiskScores.solvency}%)</div>
+                          )}
+                          {selectedRiskScoresError && (
+                            <div className="text-sm text-orange-600 mt-2">
+                              Backend scores unavailable — showing local values. ({selectedRiskScoresError})
+                            </div>
+                          )}
+
+                          {/* Overall normalized stress summary */}
+                          {(() => {
+                            const solv = (selectedRiskScores && selectedRiskScores.solvency) ?? (selectedRiskForReview && (selectedRiskForReview.solvency_ratio ?? selectedRiskForReview.solvency_ratio)) ?? 0;
+                            const stressBase = Math.max(0, Math.min(100, 100 - Number(solv || 0)));
+                            let overallLabel = 'Low';
+                            let overallClass = 'bg-green-600';
+                            if (stressBase >= 70) { overallLabel = 'Critical'; overallClass = 'bg-red-600'; }
+                            else if (stressBase >= 50) { overallLabel = 'High'; overallClass = 'bg-orange-600'; }
+                            else if (stressBase >= 30) { overallLabel = 'Elevated'; overallClass = 'bg-yellow-500'; }
+                            else if (stressBase >= 10) { overallLabel = 'Moderate'; overallClass = 'bg-teal-500'; }
+
+                            return (
+                              <div className="mt-3">
+                                <div className="flex items-center justify-between">
+                                  <div className="text-sm text-muted-foreground">Overall Stress (derived from solvency)</div>
+                                  <div className="flex items-center gap-2">
+                                    <div className={`h-2 w-2 rounded-full ${overallClass}`} />
+                                    <div className="text-sm font-medium">{overallLabel}</div>
+                                  </div>
+                                </div>
+                                <div className="w-full bg-gray-200 h-2 rounded overflow-hidden mt-1">
+                                  <div className={`${overallClass} h-2`} style={{ width: `${stressBase}%` }} />
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </CardContent>
+                      </Card>
+                    </div>
+                  );
+                })()}
+
+                {/* Approval actions */}
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      const aid = selectedRiskForReview?.risk_assessment?.id ?? selectedRiskForReview?.id;
+                      if (aid) approveRiskAssessment(Number(aid));
+                    }}
+                  >
+                    Approve Risk Assessment
+                  </Button>
+                  <Button variant="outline" onClick={closeRiskReview}>
+                    Close
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="py-6 text-center text-sm text-muted-foreground">No risk selected</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
-
-// Update the existing dataInputSchema
-const dataInputSchema = z.object({
-  capital: z.string().min(1, 'Capital is required.'),
-  liabilities: z.string().min(1, 'Liabilities is required.'),
-  date: z.date(),
-  financialStatement: z.any().optional(),
-  // NEW: Add risk assessment fields
-  underwritingRisk: z.string().optional(),
-  marketRisk: z.string().optional(),
-  creditRisk: z.string().optional(),
-  operationalRisk: z.string().optional(),
-});
-
-<div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
-  <div className="flex items-start gap-3">
-    <AlertCircle className="h-5 w-5 text-purple-600 mt-1" />
-    <div>
-      <h4 className="font-medium text-purple-900">Risk Assessment (ORSA)</h4>
-      <p className="text-sm text-purple-700 mt-1">
-        Optional: Provide risk percentages for comprehensive ORSA reporting and enhanced regulatory compliance.
-      </p>
-    </div>
-  </div>
-</div>
 

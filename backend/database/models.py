@@ -90,6 +90,15 @@ class DataSubmission(db.Model):
     capital = db.Column(Numeric, nullable=False)
     liabilities = db.Column(Numeric, nullable=False)
     solvency_ratio = db.Column(Float, nullable=True)
+    # --- Risk summary fields (nullable, new) ---
+    underwriting_risk_score = Column(Float, nullable=True)   # percent or score
+    market_risk_score = Column(Float, nullable=True)
+    credit_risk_score = Column(Float, nullable=True)
+    operational_risk_score = Column(Float, nullable=True)
+    overall_risk_score = Column(Float, nullable=True)
+    credit_risk_grade = Column(String(4), nullable=True)     # e.g. "A+", "A", "B"
+    # Optional backref to material risks linked to this submission
+    material_risks = relationship("MaterialRisk", back_populates="submission", lazy='dynamic')
 
     submission_date = db.Column(Date, nullable=True)
     insurer_submitted_at = db.Column(DateTime, nullable=True)
@@ -190,6 +199,8 @@ class MaterialRisk(db.Model):
     
     id = Column(Integer, primary_key=True)
     insurer_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    # Optional link to the submission that generated/relates to this risk
+    submission_id = Column(Integer, ForeignKey('data_submissions.id'), nullable=True)
     risk_type = Column(Enum(RiskType), nullable=False)
     risk_title = Column(String(200), nullable=False)
     risk_description = Column(Text, nullable=False)
@@ -207,6 +218,7 @@ class MaterialRisk(db.Model):
     
     # Relationships
     insurer = relationship("User", foreign_keys=[insurer_id])
+    submission = relationship("DataSubmission", back_populates="material_risks", foreign_keys=[submission_id])
 
 # 3. Stress Testing & Scenarios
 class StressTest(db.Model):

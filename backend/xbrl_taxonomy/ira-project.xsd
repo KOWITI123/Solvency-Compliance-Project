@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Reference/mock XBRL schema (for structure reference only) -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://example.org/ira-project"
+           xmlns="http://example.org/ira-project"
+           elementFormDefault="qualified">
+
+  <xs:element name="IraSubmission" type="IraSubmissionType"/>
+
+  <xs:complexType name="IraSubmissionType">
+    <xs:sequence>
+      <xs:element name="SubmissionID" type="xs:integer"/>
+      <xs:element name="InsurerID" type="xs:string" minOccurs="0"/>
+      <xs:element name="InsurerName" type="xs:string" minOccurs="0"/>
+      <xs:element name="Capital" type="xs:decimal" minOccurs="0"/>
+      <xs:element name="Liabilities" type="xs:decimal" minOccurs="0"/>
+      <xs:element name="SolvencyRatio" type="xs:decimal" minOccurs="0"/>
+      <xs:element name="SubmissionDate" type="xs:dateTime" minOccurs="0"/>
+      <xs:element name="RegulatorStatus" type="xs:string" minOccurs="0"/>
+      <xs:element name="RegulatorComments" type="xs:string" minOccurs="0"/>
+      <xs:element name="RegulatorApprovedAt" type="xs:dateTime" minOccurs="0"/>
+      <xs:element name="RegulatorRejectedAt" type="xs:dateTime" minOccurs="0"/>
+      <xs:element name="AIExtraction" minOccurs="0">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="CAR" type="xs:decimal" minOccurs="0"/>
+            <xs:element name="RequiredCapital" type="xs:decimal" minOccurs="0"/>
+            <xs:element name="AvailableCapital" type="xs:decimal" minOccurs="0"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>

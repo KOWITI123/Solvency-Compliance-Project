@@ -11,6 +11,8 @@ print("🔧 DEBUG: submit_data routes imported successfully")
 from routes.regulator_routes import register_regulator_routes
 from routes.authentication import register_auth_routes  # ✅ Add this import
 from datetime import datetime  # ✅ Add this import
+import sys
+import traceback
 
 app = Flask(__name__)
 # allow dev frontend to call API (temporarily permissive)
@@ -60,12 +62,22 @@ def debug_submissions():
         submissions = DataSubmission.query.all()
         submissions_data = []
         for sub in submissions:
+            # defensive status extraction: some DB rows may contain values not matching the Enum
+            try:
+                status_val = sub.status.value if hasattr(sub.status, 'value') else str(sub.status)
+            except Exception:
+                # fallback to raw __dict__ value or string conversion
+                try:
+                    status_val = str(sub.__dict__.get('status'))
+                except Exception:
+                    status_val = None
+
             submissions_data.append({
                 'id': sub.id,
                 'insurer_id': sub.insurer_id,
                 'capital': float(sub.capital) if sub.capital else None,
                 'liabilities': float(sub.liabilities) if sub.liabilities else None,
-                'status': sub.status.value if hasattr(sub.status, 'value') else str(sub.status),
+                'status': status_val,
                 'created_at': sub.created_at.isoformat() if sub.created_at else None
             })
         
@@ -175,13 +187,21 @@ def get_all_submissions():
         
         submissions_data = []
         for submission in submissions.items:
+            try:
+                status_val = submission.status.value if hasattr(submission.status, 'value') else str(submission.status)
+            except Exception:
+                try:
+                    status_val = str(submission.__dict__.get('status'))
+                except Exception:
+                    status_val = None
+
             submissions_data.append({
                 'id': submission.id,
                 'insurer_id': submission.insurer_id,
                 'capital': float(submission.capital) if submission.capital else None,
                 'liabilities': float(submission.liabilities) if submission.liabilities else None,
                 'solvency_ratio': float(submission.solvency_ratio) if submission.solvency_ratio else None,
-                'status': submission.status.value if hasattr(submission.status, 'value') else str(submission.status),
+                'status': status_val,
                 'submission_date': submission.submission_date.isoformat() if submission.submission_date else None,
                 'created_at': submission.created_at.isoformat() if submission.created_at else None
             })

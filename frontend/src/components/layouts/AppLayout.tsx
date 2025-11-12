@@ -36,18 +36,9 @@ const navItems: Record<UserRole, { href: string; label: string; icon: React.Elem
     { href: '/app/status', label: 'Compliance Status', icon: ShieldCheck },
     { href: '/app/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { href: '/app/blockchain-log', label: 'Blockchain Log', icon: Database },
-    { href: '/app/capital-solvency', label: 'Capital & Solvency', icon: Scale },
-    { href: '/app/insurance-performance', label: 'Insurance Performance', icon: BarChart3 },
-    { href: '/app/risk-management', label: 'Risk Management', icon: ShieldAlert },
-    { href: '/app/corporate-governance', label: 'Governance', icon: Building2 },
-    { href: '/app/ussd-simulation', label: 'USSD Sim', icon: Smartphone },
   ],
   Regulator: [
     { href: '/app/audit', label: 'Audit Dashboard', icon: Shield },
-    { href: '/app/capital-solvency', label: 'Capital & Solvency', icon: Scale },
-    { href: '/app/insurance-performance', label: 'Insurance Performance', icon: BarChart3 },
-    { href: '/app/risk-management', label: 'Risk Management', icon: ShieldAlert },
-    { href: '/app/corporate-governance', label: 'Governance', icon: Building2 },
   ],
   Admin: [
     { href: '/app/admin', label: 'Admin Dashboard', icon: Settings },
@@ -163,24 +154,24 @@ export function AppLayout() {
       fetchSubmissions();
     }
   }, [isAuthenticated, navigate, fetchSubmissions]);
-  if (!isAuthenticated) {
-    return null;
-  }
-  if (isLoading) {
-    return <PageLoader />;
-  }
-  return (
-    <div className="flex min-h-screen w-full bg-muted/40">
-      <Sidebar isCollapsed={isCollapsed} onToggle={() => setIsCollapsed(!isCollapsed)} />
-      <div className="flex flex-1 flex-col">
-        <Header />
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">
-          <div className="mx-auto max-w-7xl w-full">
-            <Outlet context={{ isSidebarCollapsed: isCollapsed }} />
+    if (!isAuthenticated) {
+      return null;
+    }
+  
+    return (
+      <>
+        <Toaster position="top-right" />
+        {isLoading && <PageLoader />}
+        <div className="min-h-screen flex">
+          <Sidebar isCollapsed={isCollapsed} onToggle={() => setIsCollapsed((v) => !v)} />
+          <div className="flex-1 flex flex-col">
+            <Header />
+            <main className="p-6">
+              {/* Provide outlet context so child pages (eg HomePage) can read sidebar state */}
+              <Outlet context={{ isSidebarCollapsed: isCollapsed, toggleSidebar: () => setIsCollapsed((v) => !v) }} />
+            </main>
           </div>
-        </main>
-      </div>
-      <Toaster richColors />
-    </div>
-  );
-}
+        </div>
+      </>
+    );
+  }
